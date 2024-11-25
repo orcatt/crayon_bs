@@ -1,6 +1,6 @@
 module.exports = {
   secretKey: 'orcatt1129',
-  port: 3000,
+  port: 8081,
   APPID: 'wxfbb2d24a31883cdd', // 小程序appid
   APPSECRET: '80479abe3eb5708305113fa9dccee639', // 小程序secret
   HL_API_URL: 'https://apis.tianapi.com/lunar/index', // 黄历API地址
