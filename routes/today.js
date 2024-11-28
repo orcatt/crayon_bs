@@ -297,4 +297,142 @@ router.delete('/todo/delete', asyncHandler(async (req, res) => {
 }));
 
 
+// 获取备忘录列表
+router.get('/memos/list', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 99;
+  const offset = (page - 1) * limit;
+  console.log(userId, page, limit, offset);
+
+  const [rows] = await db.query(
+    `SELECT 
+      id,
+      title,
+      content,
+      DATE_FORMAT(date, '%Y-%m-%d') as date,
+      time,
+      user_id,
+      is_important
+    FROM memos 
+    WHERE user_id = ? 
+    ORDER BY 
+      is_important DESC,
+      date DESC,
+      time DESC
+    LIMIT ?, ?`,
+    [userId, offset, limit]
+  );
+
+  if (rows.length === 0) {
+    return res.success([], '没有找到备忘录');
+  }
+
+  return res.success(rows, '获取备忘录列表成功');
+}));
+
+// 添加备忘录
+router.post('/memos/add', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;  // 从 JWT 中获取用户 ID
+  const { title, content, date, time, is_important = 0 } = req.body;  // 备忘录内容（is_important 默认为 0）
+
+  if (!title || !content || !date || !time) {
+    return res.error('标题、内容、日期和时间是必填项', 400);
+  }
+
+  const [result] = await db.query(
+    'INSERT INTO memos (title, content, date, time, user_id, is_important) VALUES (?, ?, ?, ?, ?, ?)',
+    [title, content, date, time, userId, is_important]
+  );
+
+  return res.success({ id: result.insertId }, '备忘录添加成功');
+}));
+
+
+// 修改备忘录
+router.post('/memos/update', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { memoId, title, content, date, time, is_important } = req.body;
+
+  if (!memoId) {
+    return res.error('备忘录 ID 是必填项', 400);
+  }
+
+  const [memo] = await db.query(
+    'SELECT * FROM memos WHERE id = ? AND user_id = ?',
+    [memoId, userId]
+  );
+
+  if (memo.length === 0) {
+    return res.error('备忘录未找到或您没有权限修改', 404);
+  }
+
+  // 构建更新的 SQL 语句，只有传递的字段才会被更新
+  const updateFields = [];
+  const updateValues = [];
+
+  if (title) {
+    updateFields.push('title = ?');
+    updateValues.push(title);
+  }
+
+  if (content) {
+    updateFields.push('content = ?');
+    updateValues.push(content);
+  }
+
+  if (date) {
+    updateFields.push('date = ?');
+    updateValues.push(date);
+  }
+
+  if (time) {
+    updateFields.push('time = ?');
+    updateValues.push(time);
+  }
+
+  if (is_important !== undefined) {
+    updateFields.push('is_important = ?');
+    updateValues.push(is_important);
+  }
+
+  if (updateFields.length === 0) {
+    return res.error('没有需要更新的字段', 400);
+  }
+
+  // 添加 userId 到更新值数组
+  updateValues.push(memoId, userId);
+
+  await db.query(
+    `UPDATE memos SET ${updateFields.join(', ')} WHERE id = ? AND user_id = ?`,
+    updateValues
+  );
+
+  return res.success({}, '备忘录更新成功');
+}));
+
+// 删除备忘录
+router.delete('/memos/delete', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;  // 从 JWT 中获取用户 ID
+  const memoId = req.query.memoId;  // 从 query 中获取备忘录 ID
+
+  if (!memoId) {
+    return res.error('备忘录 ID 是必填项', 400);
+  }
+
+  // 检查备忘录是否存在且属于当前用户
+  const [memo] = await db.query(
+    'SELECT * FROM memos WHERE id = ? AND user_id = ?',
+    [memoId, userId]
+  );
+
+  if (memo.length === 0) {
+    return res.error('备忘录未找到或您没有权限删除', 404);
+  }
+
+  await db.query('DELETE FROM memos WHERE id = ?', [memoId]);
+
+  return res.success({}, '备忘录删除成功');
+}));
+
 module.exports = router;
