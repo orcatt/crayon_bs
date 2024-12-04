@@ -435,4 +435,289 @@ router.delete('/memos/delete', asyncHandler(async (req, res) => {
   return res.success({}, '备忘录删除成功');
 }));
 
+// 处理日期累加的辅助函数
+function addToDate(date, frequency) {
+  const d = new Date(date);
+  switch (frequency) {
+    case 'daily':
+      d.setDate(d.getDate() + 1);
+      break;
+    case 'weekly':
+      d.setDate(d.getDate() + 7);
+      break;
+    case 'monthly':
+      d.setMonth(d.getMonth() + 1);
+      break;
+    case 'yearly':
+      d.setFullYear(d.getFullYear() + 1);
+      break;
+  }
+  return d;
+}
+
+// 获取倒数日列表
+router.get('/countdown/list', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [rows] = await db.query(
+    `SELECT 
+      id,
+      title,
+      DATE_FORMAT(gregorian_date, '%Y-%m-%d') as gregorian_date,
+      lunar_date,
+      is_pinned,
+      reminder_frequency,
+      is_repeating,
+      repeat_frequency,
+      repeat_count,
+      user_id,
+      is_reminder,
+      calendar_type
+    FROM countdown 
+    WHERE user_id = ? 
+    ORDER BY is_pinned DESC, gregorian_date ASC`,
+    [userId]
+  );
+
+  for (let item of rows) {
+    if (item.is_repeating && item.repeat_frequency) {
+      let eventDate = item.gregorian_date;
+      let repeatCount = item.repeat_count || 0;
+
+      while (eventDate < today) {
+        let tempDate = new Date(eventDate);
+        tempDate = addToDate(tempDate, item.repeat_frequency);
+        eventDate = tempDate.toISOString().slice(0, 10);
+        repeatCount++;
+      }
+      
+      if (eventDate !== item.gregorian_date) {
+        await db.query(
+          'UPDATE countdown SET gregorian_date = ?, repeat_count = ? WHERE id = ?',
+          [eventDate, repeatCount, item.id]
+        );
+        item.gregorian_date = eventDate;
+        item.repeat_count = repeatCount;
+      }
+    }
+  }
+
+  return res.success(rows, '获取倒数日列表成功');
+}));
+
+// 添加倒数日
+router.post('/countdown/add', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const {
+    title, gregorian_date, lunar_date, is_pinned, 
+    reminder_frequency, is_repeating, repeat_frequency, is_reminder,
+    calendar_type
+  } = req.body;
+
+  if (!title || !gregorian_date || !calendar_type) {
+    return res.error('标题、日期和日历类型为必填项', 400);
+  }
+
+  // 开始事务
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    // 如果要置顶，先将其他项目取消置顶
+    if (is_pinned) {
+      await connection.query(
+        'UPDATE countdown SET is_pinned = false WHERE user_id = ?',
+        [userId]
+      );
+    }
+
+    let finalDate = gregorian_date;
+    let repeatCount = 0;
+    
+    if (is_repeating && repeat_frequency) {
+      const today = new Date().toISOString().slice(0, 10);
+      let eventDate = gregorian_date;
+      
+      while (eventDate < today) {
+        let tempDate = new Date(eventDate);
+        tempDate = addToDate(tempDate, repeat_frequency);
+        eventDate = tempDate.toISOString().slice(0, 10);
+        repeatCount++;
+      }
+      finalDate = eventDate;
+    }
+
+    const [result] = await connection.query(
+      `INSERT INTO countdown (
+        title, gregorian_date, lunar_date, is_pinned, reminder_frequency,
+        is_repeating, repeat_frequency, user_id, is_reminder, repeat_count, calendar_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [title, finalDate, lunar_date, is_pinned, reminder_frequency,
+       is_repeating, repeat_frequency, userId, is_reminder, repeatCount, calendar_type]
+    );
+
+    // 查询插入的数据并返回
+    const [insertedData] = await connection.query(
+      `SELECT 
+        id,
+        title,
+        DATE_FORMAT(gregorian_date, '%Y-%m-%d') as gregorian_date,
+        lunar_date,
+        is_pinned,
+        reminder_frequency,
+        is_repeating,
+        repeat_frequency,
+        repeat_count,
+        user_id,
+        is_reminder,
+        calendar_type
+      FROM countdown 
+      WHERE id = ?`,
+      [result.insertId]
+    );
+
+    await connection.commit();
+    return res.success(insertedData[0], '倒数日添加成功');
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}));
+
+// 修改倒数日
+router.post('/countdown/update', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const {
+    id, title, gregorian_date, lunar_date, is_pinned,
+    reminder_frequency, is_repeating, repeat_frequency, is_reminder,
+    calendar_type
+  } = req.body;
+
+  if (!id) {
+    return res.error('倒数日ID为必填项', 400);
+  }
+
+  // 开始事务
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    // 检查是否存在且属于当前用户，同时获取当前的 repeat_count
+    const [countdown] = await connection.query(
+      `SELECT 
+        DATE_FORMAT(gregorian_date, '%Y-%m-%d') as gregorian_date,
+        repeat_count
+      FROM countdown 
+      WHERE id = ? AND user_id = ?`,
+      [id, userId]
+    );
+
+    if (countdown.length === 0) {
+      await connection.rollback();
+      return res.error('倒数日不存在或无权限修改', 404);
+    }
+
+    // 如果要设置置顶，先将其他项目取消置顶
+    if (is_pinned) {
+      await connection.query(
+        'UPDATE countdown SET is_pinned = false WHERE user_id = ?',
+        [userId]
+      );
+    }
+
+    let finalDate = gregorian_date;
+    let repeatCount = countdown[0].repeat_count || 0;
+
+    if (is_repeating && repeat_frequency && gregorian_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      let eventDate = gregorian_date;
+      
+      while (eventDate < today) {
+        let tempDate = new Date(eventDate);
+        tempDate = addToDate(tempDate, repeat_frequency);
+        eventDate = tempDate.toISOString().slice(0, 10);
+        repeatCount++;
+      }
+      finalDate = eventDate;
+    }
+
+    const updateData = {};
+    if (title !== undefined) updateData.title = title;
+    if (finalDate !== undefined) updateData.gregorian_date = finalDate;
+    if (lunar_date !== undefined) updateData.lunar_date = lunar_date;
+    if (is_pinned !== undefined) updateData.is_pinned = is_pinned;
+    if (reminder_frequency !== undefined) updateData.reminder_frequency = reminder_frequency;
+    if (is_repeating !== undefined) updateData.is_repeating = is_repeating;
+    if (repeat_frequency !== undefined) updateData.repeat_frequency = repeat_frequency;
+    if (is_reminder !== undefined) updateData.is_reminder = is_reminder;
+    if (calendar_type !== undefined) updateData.calendar_type = calendar_type;
+    updateData.repeat_count = repeatCount;
+
+    await connection.query(
+      'UPDATE countdown SET ? WHERE id = ? AND user_id = ?',
+      [updateData, id, userId]
+    );
+
+    // 查询更新后的数据并返回
+    const [updatedData] = await connection.query(
+      `SELECT 
+        id,
+        title,
+        DATE_FORMAT(gregorian_date, '%Y-%m-%d') as gregorian_date,
+        lunar_date,
+        is_pinned,
+        reminder_frequency,
+        is_repeating,
+        repeat_frequency,
+        repeat_count,
+        user_id,
+        is_reminder,
+        calendar_type
+      FROM countdown 
+      WHERE id = ?`,
+      [id]
+    );
+
+    await connection.commit();
+    return res.success(updatedData[0], '倒数日更新成功');
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}));
+
+// 删除倒数日
+router.delete('/countdown/delete', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const countdownId = req.query.countdownId;
+
+  if (!countdownId) {
+    return res.error('倒数日ID为必填项', 400);
+  }
+
+  const [countdown] = await db.query(
+    `SELECT 
+      DATE_FORMAT(gregorian_date, '%Y-%m-%d') as gregorian_date 
+    FROM countdown 
+    WHERE id = ? AND user_id = ?`,
+    [countdownId, userId]
+  );
+
+  if (countdown.length === 0) {
+    return res.error('倒数日不存在或无权限删除', 404);
+  }
+
+  await db.query(
+    'DELETE FROM countdown WHERE id = ? AND user_id = ?',
+    [countdownId, userId]
+  );
+
+  return res.success(null, '倒数日删除成功');
+}));
+
 module.exports = router;
