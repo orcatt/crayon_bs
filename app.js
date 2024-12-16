@@ -12,9 +12,9 @@ const db = require('./config/db');
 
 const indexRoutes = require('./routes/index');
 const authRoutes = require('./routes/auth');
-const todayRoutes = require('./routes/today')
+const todayRoutes = require('./routes/today');
+const healthRoutes = require('./routes/health');
 const uploadRoutes = require('./routes/upload');
-
 const app = express();
 
 // Middlewares
@@ -33,7 +33,8 @@ app.use(handleJWTError);  // JWT 错误处理
 // Routes
 app.use('/', indexRoutes);
 app.use('/auth', authRoutes);
-app.use('/today', todayRoutes)
+app.use('/today', todayRoutes);
+app.use('/health', healthRoutes);
 app.use('/upload', uploadRoutes);
 
 // Error handling - 保持在所有路由之后

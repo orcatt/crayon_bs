@@ -1,9 +1,9 @@
 const express = require('express');
-const { HL_API_URL, HL_API_KEY } = require('../config/config');
+const axios = require('axios');  // 添加这行
 const router = express.Router();
 const db = require('../config/db');  // 引入数据库连接
 const { asyncHandler } = require('../middleware/errorHandler');
-const axios = require('axios');  // 添加这行
+const { HL_API_URL, HL_API_KEY } = require('../config/config');
 
 router.get('/getAlmanac', asyncHandler(async (req, res) => {
   const { date } = req.query; // 查询参数中传递日期
