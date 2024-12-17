@@ -40,7 +40,20 @@ router.post('/register', asyncHandler(async (req, res) => {
 router.post('/login', asyncHandler(async (req, res) => {
   const { phone, password } = req.body;
   
-  const [rows] = await db.query('SELECT * FROM users WHERE phone = ?', [phone]);
+  const [rows] = await db.query(`
+    SELECT 
+      id, 
+      phone, 
+      password,
+      nickname,
+      gender,
+      height,
+      DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
+      openid
+    FROM users 
+    WHERE phone = ?`, 
+    [phone]
+  );
   
   if (!rows || rows.length === 0) {
     return res.error('手机号或密码错误', 401);
@@ -58,6 +71,9 @@ router.post('/login', asyncHandler(async (req, res) => {
     secretKey,
     { expiresIn: '24h' }
   );
+
+  // 删除密码字段
+  delete user.password;
 
   return res.success({
     token,
@@ -92,6 +108,21 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
     if (rows.length > 0) {
       // 用户已注册，生成 token 并返回登录信息
       const user = rows[0];
+      
+      // 使用 SQL 的 DATE_FORMAT 直接格式化日期
+      const [userInfo] = await db.query(`
+        SELECT 
+          id, 
+          phone, 
+          nickname, 
+          gender, 
+          height, 
+          DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
+          openid
+        FROM users 
+        WHERE id = ?
+      `, [user.id]);
+
       const token = jwt.sign(
         { userId: user.id, phone: user.phone },
         secretKey,
@@ -100,7 +131,7 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
 
       return res.success({
         token,
-        userInfo: user
+        userInfo: userInfo[0]
       }, '登录成功');
     } else {
       // 用户未注册，返回需要补充资料的提示
@@ -118,8 +149,8 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
 
 // 完善资料
 router.post('/updateUserInfo', asyncHandler(async (req, res) => {
-  const userId = req.auth.userId;  // 从 JWT 中获取用户 ID
-  const { nickname } = req.body;
+  const userId = req.auth.userId;
+  const { nickname, height, birthday } = req.body;
   let gender = req.body.gender;
 
   // 处理 gender 的类型转换
@@ -130,9 +161,21 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
     }
   }
 
+  // 验证 height 格式
+  if (height !== undefined && (!Number.isInteger(Number(height)) || height <= 0)) {
+    return res.error('身高格式无效', 400);
+  }
+
+  // 验证 birthday 格式
+  if (birthday !== undefined && isNaN(Date.parse(birthday))) {
+    return res.error('生日格式无效', 400);
+  }
+
   const updateFields = {};
   if (nickname !== undefined) updateFields.nickname = nickname;
   if (gender !== undefined) updateFields.gender = gender;
+  if (height !== undefined) updateFields.height = height;
+  if (birthday !== undefined) updateFields.birthday = birthday;
 
   if (Object.keys(updateFields).length === 0) {
     return res.error('没有提供要更新的信息', 400);
@@ -148,12 +191,14 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   }
 
   const [rows] = await db.query(
-    'SELECT id, phone, nickname, gender FROM users WHERE id = ?',
+    'SELECT id, phone, nickname, gender, height, birthday FROM users WHERE id = ?',
     [userId]
   );
 
   return res.success(rows[0], '资料更新成功');
 }));
+
+
 
 // 删除用户（后台开发接口）
 router.delete('/deleteUser', asyncHandler(async (req, res) => {
