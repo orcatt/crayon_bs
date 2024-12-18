@@ -221,13 +221,13 @@ router.post('/userIntakeFoods/list', asyncHandler(async (req, res) => {
 
 // 添加摄入食物
 router.post('/userIntakeFoods/add', asyncHandler(async (req, res) => {
-  const { user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose } = req.body;
+  const { user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path } = req.body;
   const userId = req.auth.userId;
 
   // 插入摄入食物记录
-  const insertQuery = `INSERT INTO user_intake_foods (user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, created_at, updated_at) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
-  const [result] = await db.query(insertQuery, [user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose]);
+  const insertQuery = `INSERT INTO user_intake_foods (user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path, created_at, updated_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+  const [result] = await db.query(insertQuery, [user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path]);
 
   // 更新主表数据
   const updateQuery = `
@@ -320,7 +320,7 @@ router.post('/userIntakeFoods/delete', asyncHandler(async (req, res) => {
 
 // 修改摄入食物
 router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
-  const { id, user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose } = req.body;
+  const { id, user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path } = req.body;
 
   // 1. 获取旧的食物摄入记录
   const [oldRecords] = await db.query(
@@ -355,6 +355,7 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
       fat = ?,
       protein = ?,
       cellulose = ?,
+      image_path = ?,
       updated_at = NOW()
     WHERE id = ?
   `;
@@ -370,6 +371,7 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
     fat,
     protein,
     cellulose,
+    image_path,
     id
   ]);
 
@@ -394,7 +396,7 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
 
   // 处理不同餐类的卡路里更新
   if (oldRecord.eating_type === eating_type) {
-    // 如果餐类没变，只需要更新对应餐类的卡路里差值
+    // 如果餐类没变，只需要更新应餐类的卡路里差值
     switch (eating_type) {
       case 1:
         updateIntakeQuery += ', breakfast_calories = breakfast_calories + ?';
@@ -484,6 +486,11 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
         target_type,
         bmi,
         bmr,
+        tdee,
+        activityCoefficient,
+        recommended_carbs,
+        recommended_protein,
+        recommended_fat,
         DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
         DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at
       FROM user_weight 
@@ -519,6 +526,11 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
       target_type,
       bmi,
       bmr,
+      tdee,
+      activityCoefficient,
+      recommended_carbs,
+      recommended_protein,
+      recommended_fat,
       DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
       DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at
     FROM user_weight 
@@ -534,12 +546,12 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
 // 添加身体信息
 router.post('/userWeight/add', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { date, weight, target_weight, target_type, bmi, bmr } = req.body;
-
+  const { date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat } = req.body;
+  console.log(tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat);
   // 插入数据
-  const insertQuery = `INSERT INTO user_weight (user_id, date, weight, target_weight, target_type, bmi, bmr, created_at, updated_at) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
-  const [result] = await db.query(insertQuery, [userId, date, weight, target_weight, target_type, bmi, bmr]);
+  const insertQuery = `INSERT INTO user_weight (user_id, date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat, created_at, updated_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+  const [result] = await db.query(insertQuery, [userId, date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat]);
 
   return res.success({ id: result.insertId, message: '身体数据新增成功' });
 }));
@@ -571,16 +583,16 @@ router.post('/userWeight/delete', asyncHandler(async (req, res) => {
 // 更新身体信息
 router.post('/userWeight/update', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { id, date, weight, target_weight, target_type, bmi, bmr } = req.body;
+  const { id, date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat } = req.body;
 
   // 删除旧数据
   const deleteQuery = `DELETE FROM user_weight WHERE id = ? AND user_id = ?`;
   await db.query(deleteQuery, [id, userId]);
 
   // 新增新数据
-  const insertQuery = `INSERT INTO user_weight (user_id, date, weight, target_weight, target_type, bmi, bmr, created_at, updated_at) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
-  await db.query(insertQuery, [userId, date, weight, target_weight, target_type, bmi, bmr]);
+  const insertQuery = `INSERT INTO user_weight (user_id, date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat, created_at, updated_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+  await db.query(insertQuery, [userId, date, weight, target_weight, target_type, bmi, bmr, tdee, activityCoefficient, recommended_carbs, recommended_protein, recommended_fat]);
 
   return res.success({ message: '身体数据更新成功' });
 }));
