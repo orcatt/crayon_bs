@@ -101,6 +101,64 @@ router.post('/food/list', asyncHandler(async (req, res) => {
 }));
 
 
+// 通过食物 ID 获取食物信息
+router.post('/food/detail', asyncHandler(async (req, res) => {
+  const { food_id } = req.body;  // 从请求体中获取食物 ID
+
+  // 构建查询以获取食物基本信息
+  const query = `
+    SELECT 
+      f.id,
+      f.name,
+      f.category,
+      f.calories_per_100g,
+      f.image_path,
+      GROUP_CONCAT(fa.alias_name) as alias_names
+    FROM foods_info f
+    LEFT JOIN food_aliases fa ON f.id = fa.food_id
+    WHERE f.id = ?
+    GROUP BY f.id
+  `;
+
+  // 执行查询以获取食物基本信息
+  const [rows] = await db.query(query, [food_id]);
+
+  // 检查是否找到食物
+  if (rows.length === 0) {
+    return res.error('食物未找到', 404);
+  }
+
+  const foodDetail = rows[0];
+
+  // 获取营养信息
+  const [nutritionData] = await db.query(
+    `SELECT 
+      nutrient_type,
+      nutrient_name,
+      amount_per_100g
+    FROM food_nutrition 
+    WHERE food_id = ?`,
+    [food_id]
+  );
+  foodDetail.nutrition = nutritionData;
+
+  // 获取度量单位信息
+  const [measurementData] = await db.query(
+    `SELECT 
+      unit_name,
+      weight,
+      calories
+    FROM food_measurement 
+    WHERE food_id = ?`,
+    [food_id]
+  );
+  foodDetail.measurement = measurementData;
+
+  // 返回食物信息
+  return res.success(foodDetail, '获取食物详情成功');
+}));
+
+
 // ? ----------------------------- 摄入信息 ----------------------------- 
 
 
@@ -152,7 +210,7 @@ router.post('/userIntake/daily', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
   const { date } = req.body;
 
-  // 检查当天是否已有数据
+  // 检查当天否已有数据
   const query = `
     SELECT 
       id,
@@ -209,25 +267,110 @@ router.post('/userIntake/daily', asyncHandler(async (req, res) => {
 }));
 
 
-// 摄入食物列表
+// 获取摄入食物列表
 router.post('/userIntakeFoods/list', asyncHandler(async (req, res) => {
   const { user_intake_id } = req.body;
+
+  // 查询用户摄入食物记录
   const query = `SELECT * FROM user_intake_foods WHERE user_intake_id = ?`;
   const [rows] = await db.query(query, [user_intake_id]);
 
-  return res.success(rows);
+  // 如果没有找到摄入食物记录
+  if (rows.length === 0) {
+    return res.success([], '没有找到摄入食物记录');
+  }
+
+  // 根据 food_id 获取食物信息
+  const foodIds = rows.map(item => item.food_id);
+  const foodQuery = `
+    SELECT 
+      f.id,
+      f.name,
+      f.category,
+      f.calories_per_100g,
+      f.image_path,
+      GROUP_CONCAT(fa.alias_name) as alias_names
+    FROM foods_info f
+    LEFT JOIN food_aliases fa ON f.id = fa.food_id
+    WHERE f.id IN (?)
+    GROUP BY f.id
+  `;
+
+  const [foodRows] = await db.query(foodQuery, [foodIds]);
+
+  // 将食物信息映射到摄入食物记录中
+  const foodMap = {};
+  foodRows.forEach(food => {
+    foodMap[food.id] = food;
+  });
+
+  // 获取营养信息
+  const nutritionQuery = `
+    SELECT 
+      food_id,
+      nutrient_type,
+      nutrient_name,
+      amount_per_100g
+    FROM food_nutrition 
+    WHERE food_id IN (?)
+  `;
+  const [nutritionRows] = await db.query(nutritionQuery, [foodIds]);
+
+  // 将营养信息映射到食物信息中
+  const nutritionMap = {};
+  nutritionRows.forEach(nutrition => {
+    if (!nutritionMap[nutrition.food_id]) {
+      nutritionMap[nutrition.food_id] = [];
+    }
+    nutritionMap[nutrition.food_id].push(nutrition);
+  });
+
+  // 获取度量单位信息
+  const measurementQuery = `
+    SELECT 
+      food_id,
+      unit_name,
+      weight,
+      calories
+    FROM food_measurement 
+    WHERE food_id IN (?)
+  `;
+  const [measurementRows] = await db.query(measurementQuery, [foodIds]);
+
+  // 将度量单位信息映射到食物信息中
+  const measurementMap = {};
+  measurementRows.forEach(measurement => {
+    if (!measurementMap[measurement.food_id]) {
+      measurementMap[measurement.food_id] = [];
+    }
+    measurementMap[measurement.food_id].push(measurement);
+  });
+
+  const result = rows.map(item => {
+    return {
+      ...item,
+      food_info: {
+        ...foodMap[item.food_id],
+        nutrition: nutritionMap[item.food_id] || [], // 如果没有找到营养信息，返回空数组
+        measurement: measurementMap[item.food_id] || [] // 如果没有找到度量单位信息，返回空数组
+      }
+    };
+  });
+
+  return res.success(result);
 }));
 
 
 // 添加摄入食物
 router.post('/userIntakeFoods/add', asyncHandler(async (req, res) => {
-  const { user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path } = req.body;
+  const { user_intake_id, food_id, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose } = req.body;
   const userId = req.auth.userId;
 
-  // 插入摄入食物记录
-  const insertQuery = `INSERT INTO user_intake_foods (user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path, created_at, updated_at) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
-  const [result] = await db.query(insertQuery, [user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path]);
+  // 插入摄入食物记录，不再接收 food_name, food_category, image_path
+  const insertQuery = `INSERT INTO user_intake_foods (user_intake_id, food_id, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, created_at, updated_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+  
+  const [result] = await db.query(insertQuery, [user_intake_id, food_id, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose]);
 
   // 更新主表数据
   const updateQuery = `
@@ -240,6 +383,7 @@ router.post('/userIntakeFoods/add', asyncHandler(async (req, res) => {
         updated_at = NOW()
     WHERE id = ?
   `;
+  
   await db.query(updateQuery, [calories, carbohydrate, fat, protein, cellulose, user_intake_id]);
 
   return res.success({ message: '食物摄入新增成功' });
@@ -320,7 +464,7 @@ router.post('/userIntakeFoods/delete', asyncHandler(async (req, res) => {
 
 // 修改摄入食物
 router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
-  const { id, user_intake_id, food_id, food_name, food_category, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose, image_path } = req.body;
+  const { id, user_intake_id, food_id, foods_weight, eating_type, calories, carbohydrate, fat, protein, cellulose } = req.body;
 
   // 1. 获取旧的食物摄入记录
   const [oldRecords] = await db.query(
@@ -334,20 +478,28 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
 
   const oldRecord = oldRecords[0];
 
-  // 2. 计算修改前后的差异
+  // 2. 从 foods_info 表中获取食物的名称、类别和图片路径
+  const [foodInfo] = await db.query(
+    `SELECT name, category FROM foods_info WHERE id = ?`,
+    [food_id]
+  );
+
+  if (foodInfo.length === 0) {
+    return res.error('食物未找到', 404);
+  }
+
+  // 3. 计算修改前后的差
   const caloriesDiff = calories - oldRecord.calories;
   const carbohydrateDiff = carbohydrate - oldRecord.carbohydrate;
   const fatDiff = fat - oldRecord.fat;
   const proteinDiff = protein - oldRecord.protein;
   const celluloseDiff = cellulose - oldRecord.cellulose;
 
-  // 3. 更新 user_intake_foods 表中的记录
+  // 4. 更新 user_intake_foods 表中的记录
   const updateFoodQuery = `
     UPDATE user_intake_foods 
     SET 
       food_id = ?,
-      food_name = ?,
-      food_category = ?,
       foods_weight = ?,
       eating_type = ?,
       calories = ?,
@@ -355,15 +507,12 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
       fat = ?,
       protein = ?,
       cellulose = ?,
-      image_path = ?,
       updated_at = NOW()
     WHERE id = ?
   `;
 
   await db.query(updateFoodQuery, [
     food_id,
-    food_name,
-    food_category,
     foods_weight,
     eating_type,
     calories,
@@ -371,11 +520,10 @@ router.post('/userIntakeFoods/update', asyncHandler(async (req, res) => {
     fat,
     protein,
     cellulose,
-    image_path,
     id
   ]);
 
-  // 4. 更新主表的总量
+  // 5. 更新主表的总量
   let updateIntakeQuery = `
     UPDATE user_intake 
     SET 
@@ -515,7 +663,7 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
     queryParams.push(end_date);
   }
 
-  // 修改 SELECT 语句，使用 DATE_FORMAT 格式化日期
+  // 修改 SELECT 语句，使用 DATE_FORMAT 格式日期
   const query = `
     SELECT 
       id,
@@ -596,6 +744,7 @@ router.post('/userWeight/update', asyncHandler(async (req, res) => {
 
   return res.success({ message: '身体数据更新成功' });
 }));
+
 
 
 module.exports = router;
