@@ -691,6 +691,126 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
 }));
 
 
+// 获取某天身体信息
+router.post('/userWeight/daily', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { date } = req.body;
+
+  if (!date) {
+    return res.error('日期参数必传', 400);
+  }
+
+  // 检查当天是否已有数据
+  const query = `
+    SELECT 
+      id,
+      user_id,
+      DATE_FORMAT(date, '%Y-%m-%d') as date,
+      weight,
+      target_weight,
+      target_type,
+      bmi,
+      bmr,
+      tdee,
+      activityCoefficient,
+      recommended_carbs,
+      recommended_protein,
+      recommended_fat,
+      DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
+      DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at
+    FROM user_weight 
+    WHERE user_id = ? AND date = ?
+  `;
+  
+  const [existingData] = await db.query(query, [userId, date]);
+
+  if (existingData.length > 0) {
+    return res.success(existingData[0]);
+  }
+
+  // 如果当天没有数据，查找最临近的数据（包括之前和之后的日期）
+  const nearestQuery = `
+    SELECT 
+      id,
+      user_id,
+      DATE_FORMAT(date, '%Y-%m-%d') as date,
+      weight,
+      target_weight,
+      target_type,
+      bmi,
+      bmr,
+      tdee,
+      activityCoefficient,
+      recommended_carbs,
+      recommended_protein,
+      recommended_fat,
+      DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
+      DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at,
+      ABS(DATEDIFF(date, ?)) as date_diff
+    FROM user_weight 
+    WHERE user_id = ?
+    ORDER BY date_diff ASC
+    LIMIT 1
+  `;
+
+  const [nearestData] = await db.query(nearestQuery, [date, userId]);
+
+  if (nearestData.length === 0) {
+    return res.success(null, '没有历史数据', 403); // 只有在用户完全没有数据时才返回 403
+  }
+
+  // 使用最临近的数据创建新记录
+  const insertQuery = `
+    INSERT INTO user_weight (
+      user_id, date, weight, target_weight, target_type, 
+      bmi, bmr, tdee, activityCoefficient,
+      recommended_carbs, recommended_protein, recommended_fat,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+  `;
+
+  const [result] = await db.query(insertQuery, [
+    userId,
+    date,
+    nearestData[0].weight,
+    nearestData[0].target_weight,
+    nearestData[0].target_type,
+    nearestData[0].bmi,
+    nearestData[0].bmr,
+    nearestData[0].tdee,
+    nearestData[0].activityCoefficient,
+    nearestData[0].recommended_carbs,
+    nearestData[0].recommended_protein,
+    nearestData[0].recommended_fat
+  ]);
+
+  // 查询并返回新创建的记录
+  const [newRecord] = await db.query(
+    `SELECT 
+      id,
+      user_id,
+      DATE_FORMAT(date, '%Y-%m-%d') as date,
+      weight,
+      target_weight,
+      target_type,
+      bmi,
+      bmr,
+      tdee,
+      activityCoefficient,
+      recommended_carbs,
+      recommended_protein,
+      recommended_fat,
+      DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
+      DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at
+    FROM user_weight 
+    WHERE id = ?`,
+    [result.insertId]
+  );
+
+  return res.success(newRecord[0]);
+}));
+
+
 // 添加身体信息
 router.post('/userWeight/add', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
