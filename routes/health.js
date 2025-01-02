@@ -622,34 +622,6 @@ router.post('/userWeight/list', asyncHandler(async (req, res) => {
   const { start_date, end_date } = req.body;
   const userId = req.auth.userId;
 
-  // 如果没有传日期，则返回最新的数据
-  if (!start_date && !end_date) {
-    const latestQuery = `
-      SELECT 
-        id,
-        user_id,
-        DATE_FORMAT(date, '%Y-%m-%d') as date,
-        weight,
-        target_weight,
-        target_type,
-        bmi,
-        bmr,
-        tdee,
-        activityCoefficient,
-        recommended_carbs,
-        recommended_protein,
-        recommended_fat,
-        DATE_FORMAT(created_at, '%Y-%m-%d') as created_at,
-        DATE_FORMAT(updated_at, '%Y-%m-%d') as updated_at
-      FROM user_weight 
-      WHERE user_id = ? 
-      ORDER BY date DESC 
-      LIMIT 1
-    `;
-    const [latestData] = await db.query(latestQuery, [userId]);
-    return res.success(latestData);
-  }
-
   // 构建查询条件
   let whereClause = `WHERE user_id = ?`;
   const queryParams = [userId];
@@ -810,6 +782,13 @@ router.post('/userWeight/daily', asyncHandler(async (req, res) => {
   return res.success(newRecord[0]);
 }));
 
+// 获取身体体重的最大值和最小值
+router.post('/userWeight/maxMin', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const query = `SELECT MAX(weight) as max_weight, MIN(weight) as min_weight FROM user_weight WHERE user_id = ?`;
+  const [result] = await db.query(query, [userId]);
+  return res.success(result[0]);
+}));
 
 // 添加身体信息
 router.post('/userWeight/add', asyncHandler(async (req, res) => {

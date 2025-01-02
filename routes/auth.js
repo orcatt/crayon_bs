@@ -69,7 +69,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   const token = jwt.sign(
     { userId: user.id, phone: user.phone },
     secretKey,
-    { expiresIn: '24h' }
+    { expiresIn: '30d' }
   );
 
   // 删除密码字段
@@ -126,7 +126,7 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
       const token = jwt.sign(
         { userId: user.id, phone: user.phone },
         secretKey,
-        { expiresIn: '24h' }
+        { expiresIn: '30d' }
       );
 
       return res.success({
