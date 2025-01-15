@@ -13,7 +13,9 @@ const jwtAuth = jwtMiddleware({
     '/auth/deleteUser',
     '/auth/wechat-login',
     '/today/getAlmanac',
-    '/'
+    '/explore/drug/search',
+    '/',
+    
   ] 
 });
 

@@ -15,6 +15,7 @@ const authRoutes = require('./routes/auth');
 const todayRoutes = require('./routes/today');
 const healthRoutes = require('./routes/health');
 const dictionaryRoutes = require('./routes/explore/dictionary');
+const drugRoutes = require('./routes/explore/drug');
 const uploadRoutes = require('./routes/upload');
 const app = express();
 
@@ -38,6 +39,7 @@ app.use('/today', todayRoutes);
 app.use('/health', healthRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/explore/dictionary', dictionaryRoutes);
+app.use('/explore/drug', drugRoutes);
 
 // Error handling - 保持在所有路由之后
 app.use(errorHandler);
