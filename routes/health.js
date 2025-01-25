@@ -844,6 +844,334 @@ router.post('/userWeight/update', asyncHandler(async (req, res) => {
   return res.success({ message: '身体数据更新成功' });
 }));
 
+// ? ----------------------------- 菜谱本 -----------------------------
+
+// 获取菜谱列表
+router.get('/recipes/list', asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+
+  // 计算分页偏移量
+  const offset = (page - 1) * limit;
+
+  try {
+      const query = `
+          SELECT
+              r.id AS recipe_id,
+              r.name AS recipe_name,
+              r.tags,
+              r.rating,
+              r.image_path,
+              r.is_pinned,
+              ri.id AS ingredient_id,
+              ri.name AS ingredient_name,
+              ri.quantity,
+              ri.unit,
+              ri.sort_order AS ingredient_sort_order,
+              rs.id AS step_id,
+              rs.step_number,
+              rs.content AS step_content,
+              rs.image_path AS step_image_path
+          FROM recipes r
+          LEFT JOIN recipes_ingredients ri ON r.id = ri.recipe_id
+          LEFT JOIN recipes_steps rs ON r.id = rs.recipe_id
+          ORDER BY r.is_pinned DESC, r.created_at DESC, ri.sort_order ASC, rs.step_number ASC
+          LIMIT ? OFFSET ?
+      `;
+      
+      // 执行查询
+      const [rows] = await db.query(query, [parseInt(limit), offset]);
+
+      // 对查询结果进行处理，将食材和步骤数据嵌套到每个菜谱对象中
+      const result = rows.reduce((acc, row) => {
+          const {
+              recipe_id,
+              recipe_name,
+              tags,
+              rating,
+              image_path,
+              is_pinned,
+              ingredient_id,
+              ingredient_name,
+              quantity,
+              unit,
+              ingredient_sort_order,
+              step_id,
+              step_number,
+              step_content,
+              step_image_path
+          } = row;
+
+          // 如果菜谱不在列表中，先创建它
+          let recipe = acc.find(r => r.recipe_id === recipe_id);
+          if (!recipe) {
+              recipe = {
+                  recipe_id,
+                  recipe_name,
+                  tags,
+                  rating,
+                  image_path,
+                  is_pinned,
+                  ingredients: [],
+                  steps: []
+              };
+              acc.push(recipe);
+          }
+
+          // 检查食材是否已添加，避免重复添加
+          if (ingredient_id && !recipe.ingredients.some(i => i.ingredient_id === ingredient_id)) {
+              recipe.ingredients.push({
+                  ingredient_id,
+                  ingredient_name,
+                  quantity,
+                  unit,
+                  ingredient_sort_order
+              });
+          }
+
+          // 检查步骤是否已添加，避免重复添加
+          if (step_id && !recipe.steps.some(s => s.step_id === step_id)) {
+              recipe.steps.push({
+                  step_id,
+                  step_number,
+                  step_content,
+                  step_image_path
+              });
+          }
+
+          return acc;
+      }, []);
+
+      // 返回最终数据
+      return res.success({
+          data: result,
+          message: '菜品列表获取成功'
+      });
+  } catch (error) {
+      console.error('Error fetching recipe list:', error);
+      return res.error('菜品列表获取失败，请稍后重试', 500);
+  }
+}));
+
+
+// 新增菜谱
+router.post('/recipes/add', asyncHandler(async (req, res) => {
+  const { name, tags, rating, image_path, is_pinned } = req.body;
+
+  // 参数校验
+  if (!name || rating === undefined) {
+      return res.error('菜名和喜爱程度为必填项', 400);
+  }
+
+  // 如果传入置顶，则先取消其他菜谱的置顶状态
+  const connection = await db.getConnection();
+  try {
+      await connection.beginTransaction();
+
+      if (is_pinned) {
+          const unpinQuery = 'UPDATE recipes SET is_pinned = 0 WHERE is_pinned = 1';
+          await connection.query(unpinQuery);
+      }
+
+      // 插入新菜谱
+      const insertQuery = `
+          INSERT INTO recipes (name, tags, rating, image_path, is_pinned, created_at, updated_at) 
+          VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+      `;
+      const [result] = await connection.query(insertQuery, [name, tags || null, rating, image_path || null, is_pinned || 0]);
+
+      await connection.commit();
+
+      return res.success({
+          id: result.insertId,
+          message: '菜谱新增成功'
+      });
+  } catch (error) {
+      await connection.rollback();
+      console.error('Error adding recipe:', error);
+      return res.error('菜谱新增失败，请稍后重试', 500);
+  } finally {
+      connection.release();
+  }
+}));
+
+
+// 更新菜谱
+router.post('/recipes/update', asyncHandler(async (req, res) => {
+  const { id, name, tags, rating, image_path, is_pinned } = req.body;
+
+  // 参数校验
+  if (!id) {
+      return res.error('id 为必填项', 400);
+  }
+
+  const connection = await db.getConnection();
+  try {
+      await connection.beginTransaction();
+
+      // 如果传入置顶，则先取消其他菜谱的置顶状态
+      if (is_pinned) {
+          const unpinQuery = 'UPDATE recipes SET is_pinned = 0 WHERE is_pinned = 1 AND id != ?';
+          await connection.query(unpinQuery, [id]);
+      }
+
+      // 更新菜谱
+      const updateQuery = `
+          UPDATE recipes 
+          SET 
+              name = COALESCE(?, name), 
+              tags = COALESCE(?, tags), 
+              rating = COALESCE(?, rating), 
+              image_path = COALESCE(?, image_path), 
+              is_pinned = COALESCE(?, is_pinned), 
+              updated_at = NOW()
+          WHERE id = ?
+      `;
+      const [result] = await connection.query(updateQuery, [name, tags, rating, image_path, is_pinned, id]);
+
+      await connection.commit();
+
+      if (result.affectedRows > 0) {
+          return res.success({ message: '菜谱修改成功' });
+      } else {
+          return res.error('菜谱未找到或修改失败', 404);
+      }
+  } catch (error) {
+      await connection.rollback();
+      console.error('Error updating recipe:', error);
+      return res.error('菜谱修改失败，请稍后重试', 500);
+  } finally {
+      connection.release();
+  }
+}));
+
+
+// 删除菜谱
+router.delete('/recipes/delete', asyncHandler(async (req, res) => {
+    const { id } = req.query;
+
+    // 参数校验
+    if (!id) {
+        return res.error('id 为必填项', 400);
+    }
+
+    try {
+        // 删除主表菜谱数据
+        const deleteQuery = 'DELETE FROM recipes WHERE id = ?';
+        const [result] = await db.query(deleteQuery, [id]);
+
+        if (result.affectedRows > 0) {
+            return res.success({ message: '菜谱删除成功' });
+        } else {
+            return res.error('菜谱未找到或删除失败', 404);
+        }
+    } catch (error) {
+        console.error('Error deleting recipe:', error);
+        return res.error('菜谱删除失败，请稍后重试', 500);
+    }
+}));
+
+
+// 批量增删改食材接口
+router.post('/recipes/ingredients/replace', asyncHandler(async (req, res) => {
+  const { recipe_id, ingredients } = req.body;
+
+  // 参数校验
+  if (!recipe_id || !Array.isArray(ingredients) || ingredients.length === 0) {
+      return res.error('recipe_id 和 ingredients 数组为必填项，且数组不能为空', 400);
+  }
+
+  // 开启事务
+  const connection = await db.getConnection();
+  try {
+      await connection.beginTransaction();
+
+      // 1. 删除旧数据
+      const deleteQuery = 'DELETE FROM recipes_ingredients WHERE recipe_id = ?';
+      await connection.query(deleteQuery, [recipe_id]);
+
+      // 2. 插入新数据
+      const insertQuery = `
+          INSERT INTO recipes_ingredients (recipe_id, name, quantity, unit, sort_order) 
+          VALUES ?
+      `;
+      const values = ingredients.map((ingredient, index) => {
+          const { name, quantity, unit, sort_order } = ingredient;
+
+          if (!name || !unit) {
+              throw new Error('ingredients 数组中的每个对象必须包含 name 和 unit 字段');
+          }
+
+          return [recipe_id, name, quantity || null, unit, sort_order !== undefined ? sort_order : index + 1];
+      });
+
+      const [result] = await connection.query(insertQuery, [values]);
+
+      // 提交事务
+      await connection.commit();
+
+      return res.success({
+          message: '食材数据更新成功',
+          replacedCount: result.affectedRows
+      });
+  } catch (error) {
+      await connection.rollback();
+      console.error('Error replacing ingredients:', error);
+      return res.error('食材数据更新失败，请稍后重试', 500);
+  } finally {
+      connection.release();
+  }
+}));
+
+// 批量增删改步骤接口
+router.post('/recipes/steps/replace', asyncHandler(async (req, res) => {
+  const { recipe_id, steps } = req.body;
+
+  // 参数校验
+  if (!recipe_id || !Array.isArray(steps) || steps.length === 0) {
+      return res.error('recipe_id 和 steps 数组为必填项，且数组不能为空', 400);
+  }
+
+  // 开启事务
+  const connection = await db.getConnection();
+  try {
+      await connection.beginTransaction();
+
+      // 1. 删除旧数据
+      const deleteQuery = 'DELETE FROM recipes_steps WHERE recipe_id = ?';
+      await connection.query(deleteQuery, [recipe_id]);
+
+      // 2. 插入新数据
+      const insertQuery = `
+          INSERT INTO recipes_steps (recipe_id, step_number, content, image_path) 
+          VALUES ?
+      `;
+      const values = steps.map((step, index) => {
+          const { step_number, content, image_path } = step;
+
+          if (!step_number || !content) {
+              throw new Error('steps 数组中的每个对象必须包含 step_number 和 content 字段');
+          }
+
+          return [recipe_id, step_number, content, image_path || null];
+      });
+
+      const [result] = await connection.query(insertQuery, [values]);
+
+      // 提交事务
+      await connection.commit();
+
+      return res.success({
+          message: '步骤数据更新成功',
+          replacedCount: result.affectedRows
+      });
+  } catch (error) {
+      await connection.rollback();
+      console.error('Error replacing steps:', error);
+      return res.error('步骤数据更新失败，请稍后重试', 500);
+  } finally {
+      connection.release();
+  }
+}));
 
 
 module.exports = router;
