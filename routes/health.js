@@ -847,8 +847,8 @@ router.post('/userWeight/update', asyncHandler(async (req, res) => {
 // ? ----------------------------- 菜谱本 -----------------------------
 
 // 获取菜谱列表
-router.get('/recipes/list', asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10 } = req.query;
+router.post('/recipes/list', asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10 } = req.body;
 
   // 计算分页偏移量
   const offset = (page - 1) * limit;
