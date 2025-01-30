@@ -60,8 +60,10 @@ router.post('/recipes/delete-image', asyncHandler(async (req, res) => {
   }
 
   try {
-      // 构造服务器上的绝对路径
-      const imageFilePath = path.join('/www/wwwroot/crayon/static/recipes', image_path.replace('/static/recipes', ''));
+      // 从完整路径中提取文件名
+      const filename = path.basename(image_path);
+      // 直接使用文件名构造服务器上的绝对路径
+      const imageFilePath = path.join('/www/wwwroot/crayon/static/recipes', filename);
 
       // 检查文件是否存在
       if (fs.existsSync(imageFilePath)) {
