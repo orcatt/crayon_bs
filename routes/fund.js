@@ -28,8 +28,8 @@ router.post('/holdingShares/add', asyncHandler(async (req, res) => {
 
   // 设置默认值
   const defaultValues = {
-    total_amount: 0,
-    total_shares: 0,
+    holding_amount: 0,
+    holding_shares: 0,
     average_net_value: 0,
     holding_profit: 0,
     holding_profit_rate: 0,
@@ -40,7 +40,7 @@ router.post('/holdingShares/add', asyncHandler(async (req, res) => {
 
   try {
     const [result] = await db.query(
-      'INSERT INTO `fund_holdings` (`user_id`, `fund_name`, `code`, `total_amount`, `total_shares`, `average_net_value`, `holding_profit`, `holding_profit_rate`, `total_profit`, `total_profit_rate`, `management_fee`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO `fund_holdings` (`user_id`, `fund_name`, `code`, `holding_amount`, `holding_shares`, `average_net_value`, `holding_profit`, `holding_profit_rate`, `total_profit`, `total_profit_rate`, `management_fee`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [userId, fund_name, code, ...Object.values(defaultValues)]
     );
     return res.success({ id: result.insertId }, '基金新增成功');
@@ -120,9 +120,10 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
   const fund = fundRecord[0];
 
   // 如果当前基金持有数据的总金额和总份额是 0，则说明是初始化状态
-  let updatedAmount = parseFloat(fund.total_amount) || 0;  // 确保总金额是有效数字
-  let updatedShares = parseFloat(fund.total_shares) || 0;   // 确保持有份额是有效数字
-  let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 确保平均净值是有效数字
+  let updatedAmount = parseFloat(fund.holding_amount) || 0;  // 当前持有金额
+  let updatedShares = parseFloat(fund.holding_shares) || 0;   // 当前持有份额
+  let updatedTotalAmount = parseFloat(fund.total_amount) || 0;  // 总买入金额
+  let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 平均净值
 
   // 开始事务
   const connection = await db.getConnection();
@@ -137,16 +138,16 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
     await connection.query(insertQuery, [userId, fund_id, transaction_type, shares, net_value, amount, transaction_date]);
 
     // 2. 更新基金持有表
-    if (transaction_type === 'buy') { // 买入
-      // 如果是买入操作，则累加金额和份额
-      updatedAmount += parseFloat(amount); // 买入时累加金额
-      updatedShares += parseFloat(shares); // 买入时累加份额
+    if (transaction_type === 'buy') { // 买入操作
+      // 累加总买入金额
+      updatedTotalAmount += parseFloat(amount); // 累加总买入金额
+      updatedAmount += parseFloat(amount); // 累加当前持有金额
+      updatedShares += parseFloat(shares); // 累加持有份额
 
       // 计算新的平均净值
-      updatedAverageNetValue = updatedAmount / updatedShares;
-
-    } else if (transaction_type === 'sell') { // 卖出
-      // 如果是卖出操作，则减少金额和份额
+      updatedAverageNetValue = updatedTotalAmount / updatedShares;
+    } else if (transaction_type === 'sell') { // 卖出操作
+      // 卖出时，减少当前持有金额和份额
       if (parseFloat(shares) > updatedShares) {
         return res.error('卖出份额不能大于持有份额', 400);
       }
@@ -156,7 +157,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 
       // 计算新的平均净值
       if (updatedShares > 0) {
-        updatedAverageNetValue = updatedAmount / updatedShares; // 计算新的平均净值
+        updatedAverageNetValue = updatedTotalAmount / updatedShares; // 计算新的平均净值
       } else {
         updatedAverageNetValue = 0; // 如果份额为 0，平均净值设置为 0
       }
@@ -165,15 +166,15 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
     // 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET total_amount = ?, total_shares = ?, average_net_value = ?
+      SET holding_amount = ?, holding_shares = ?, total_amount = ?, average_net_value = ?
       WHERE id = ?
     `;
-    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, fund_id]);
+    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedTotalAmount, updatedAverageNetValue, fund_id]);
 
     // 提交事务
     await connection.commit();
 
-    return res.success({ message: '买入/卖出成功' });
+    return res.success({ message: '买入卖出成功' });
 
   } catch (error) {
     // 回滚事务
@@ -285,8 +286,8 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     await connection.query(deleteQuery, [transaction_id]);
 
     // 2. 根据交易类型重新计算基金持有数据
-    let updatedAmount = parseFloat(fund.total_amount) || 0;  // 确保总金额是有效数字
-    let updatedShares = parseFloat(fund.total_shares) || 0;   // 确保持有份额是有效数字
+    let updatedAmount = parseFloat(fund.holding_amount) || 0;  // 确保总金额是有效数字
+    let updatedShares = parseFloat(fund.holding_shares) || 0;   // 确保持有份额是有效数字
     let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 确保平均净值是有效数字
 
     if (transaction_type === 'buy') { // 如果是买入记录，删除时减少金额和份额
@@ -307,7 +308,7 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     // 3. 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET total_amount = ?, total_shares = ?, average_net_value = ?
+      SET holding_amount = ?, holding_shares = ?, average_net_value = ?
       WHERE id = ?
     `;
     await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, fund_id]);
