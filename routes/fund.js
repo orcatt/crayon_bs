@@ -119,9 +119,10 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
   // 获取当前的基金持有数据
   const fund = fundRecord[0];
 
-  // 如果当前基金持有数据的总金额和总份额是 0，则说明是初始化状态
-  let updatedAmount = parseFloat(fund.holding_amount) || 0;  // 当前持有金额
+  // 当前持有的份额和成本
   let updatedShares = parseFloat(fund.holding_shares) || 0;   // 当前持有份额
+  let updatedAmount = parseFloat(fund.holding_amount) || 0;  // 当前持有金额
+  let updatedHoldingCost = parseFloat(fund.holding_cost) || 0;  // 当前单股持有成本
   let updatedTotalAmount = parseFloat(fund.total_amount) || 0;  // 总买入金额
   let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 平均净值
 
@@ -139,11 +140,15 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 
     // 2. 更新基金持有表
     if (transaction_type === 'buy') { // 买入操作
-      // 累加总买入金额
+      // 计算新的持有成本（加权平均）
+      updatedHoldingCost = ((updatedHoldingCost * updatedShares) + (parseFloat(net_value) * parseFloat(shares))) / (updatedShares + parseFloat(shares));
+    
+      // 累加总买入金额和份额
       updatedTotalAmount += parseFloat(amount); // 累加总买入金额
       updatedAmount += parseFloat(amount); // 累加当前持有金额
       updatedShares += parseFloat(shares); // 累加持有份额
-
+    
+   
       // 计算新的平均净值
       updatedAverageNetValue = updatedTotalAmount / updatedShares;
     } else if (transaction_type === 'sell') { // 卖出操作
@@ -166,10 +171,10 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
     // 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET holding_amount = ?, holding_shares = ?, total_amount = ?, average_net_value = ?
+      SET holding_amount = ?, holding_shares = ?, total_amount = ?, average_net_value = ?, holding_cost = ?
       WHERE id = ?
     `;
-    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedTotalAmount, updatedAverageNetValue, fund_id]);
+    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedTotalAmount, updatedAverageNetValue, updatedHoldingCost, fund_id]);
 
     // 提交事务
     await connection.commit();
@@ -288,14 +293,25 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     // 2. 根据交易类型重新计算基金持有数据
     let updatedAmount = parseFloat(fund.holding_amount) || 0;  // 确保总金额是有效数字
     let updatedShares = parseFloat(fund.holding_shares) || 0;   // 确保持有份额是有效数字
+    let updatedHoldingCost = parseFloat(fund.holding_cost) || 0;  // 当前持有成本
     let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 确保平均净值是有效数字
 
     if (transaction_type === 'buy') { // 如果是买入记录，删除时减少金额和份额
       updatedAmount -= parseFloat(amount); // 减少金额
       updatedShares -= parseFloat(shares); // 减少份额
+
+      // 计算已删除的买入份额成本
+      const deletedHoldingCost = parseFloat(amount) / parseFloat(shares);  // 每股的成本
+      const remainingShares = updatedShares;
+
+      // 新的持有成本 = （当前持有成本 * 当前份额 - 已删除买入份额的成本）/ 剩余份额
+      updatedHoldingCost = ((updatedHoldingCost * (updatedShares + parseFloat(shares))) - (deletedHoldingCost * parseFloat(shares))) / remainingShares;
+
     } else if (transaction_type === 'sell') { // 如果是卖出记录，删除时增加金额和份额
       updatedAmount += parseFloat(amount); // 增加金额
       updatedShares += parseFloat(shares); // 增加份额
+
+      // 卖出时，持有成本保持不变
     }
 
     // 重新计算平均净值：如果份额为 0，则设置为 0
@@ -308,10 +324,10 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     // 3. 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET holding_amount = ?, holding_shares = ?, average_net_value = ?
+      SET holding_amount = ?, holding_shares = ?, average_net_value = ?, holding_cost = ?
       WHERE id = ?
     `;
-    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, fund_id]);
+    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, updatedHoldingCost, fund_id]);
 
     // 提交事务
     await connection.commit();
@@ -325,6 +341,140 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     return res.error('操作失败，请稍后重试', 500);
   } finally {
     connection.release();
+  }
+}));
+
+// 盈利更新接口
+router.post('/holdingShares/profit', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;  // 从 JWT 中获取用户 ID
+  const { fund_id, current_net_value, transaction_date } = req.body;
+  // 参数验证
+  if (!fund_id || !current_net_value || !transaction_date) {
+    return res.error('缺少必要的字段', 400);
+  }
+
+  // 查找基金持有记录
+  const [fundRecord] = await db.query('SELECT * FROM `fund_holdings` WHERE `id` = ? AND `user_id` = ?', [fund_id, userId]);
+  if (fundRecord.length === 0) {
+    return res.error('没有权限操作该基金', 403);  // 用户没有权限操作该基金
+  }
+
+  const fund = fundRecord[0];
+  const { average_net_value, holding_shares } = fund;
+
+  // 如果当前净值大于平均净值，计算盈利（前后端同时限制）
+  if (current_net_value > average_net_value) {
+    const profit_loss = (current_net_value - average_net_value) * holding_shares;
+
+    // 1. 更新 fund_daily_profit_loss 表
+    const insertProfitQuery = `
+      INSERT INTO fund_daily_profit_loss (fund_id, user_id, transaction_date, profit_loss_type, profit_loss)
+      VALUES (?, ?, ?, 0, ?)
+    `;
+    await db.query(insertProfitQuery, [fund_id, userId, transaction_date, profit_loss]);
+
+    // 2. 更新 fund_daily_profit_loss_summary 表
+    const insertSummaryQuery = `
+      INSERT INTO fund_daily_profit_loss_summary (user_id, transaction_date, total_profit_loss_type, total_profit_loss)
+      VALUES (?, ?, 0, ?)
+    `;
+    await db.query(insertSummaryQuery, [userId, transaction_date, profit_loss]);
+
+    // 3. 更新 fund_holdings 表
+    const updatedHoldingAmount = (parseFloat(fund.holding_amount) + parseFloat(profit_loss)).toFixed(3);  // 更新持有金额
+    const updatedHoldingProfit = (parseFloat(fund.holding_profit) + parseFloat(profit_loss)).toFixed(3);  // 更新持有收益
+    const updatedTotalProfit = (parseFloat(fund.total_profit) + parseFloat(profit_loss)).toFixed(3);  // 更新总收益
+
+    // 计算新的持有收益率和总收益率，确保不除以零
+    const newHoldingProfitRate = updatedHoldingAmount !== 0 ? (parseFloat(updatedHoldingProfit) / parseFloat(updatedHoldingAmount)).toFixed(3) : 0; // 如果持有金额为 0，收益率设为 0
+    const newTotalProfitRate = parseFloat(fund.total_amount) !== 0 ? (parseFloat(updatedTotalProfit) / parseFloat(fund.total_amount)).toFixed(3) : 0; // 如果总金额为 0，总收益率设为 0
+
+    // 计算新的平均净值
+    let newAverageNetValue = 0;
+    if (parseFloat(fund.holding_shares) > 0) {
+      newAverageNetValue = (parseFloat(updatedHoldingAmount) / parseFloat(fund.holding_shares)).toFixed(3);  // 总金额 / 持有份额
+    }
+
+    // 更新基金持有表
+    const updateFundHoldingQuery = `
+      UPDATE fund_holdings
+      SET holding_amount = ?, holding_profit = ?, holding_profit_rate = ?, total_profit = ?, total_profit_rate = ?, average_net_value = ?
+      WHERE id = ?
+    `;
+    await db.query(updateFundHoldingQuery, [
+      updatedHoldingAmount, updatedHoldingProfit, newHoldingProfitRate, updatedTotalProfit, newTotalProfitRate, newAverageNetValue, fund_id
+    ]);
+    return res.success({ message: '盈利更新成功' });
+  } else {
+    return res.error('当前净值未超过平均净值，无盈利产生', 400);
+  }
+}));
+
+// 亏损更新接口
+router.post('/holdingShares/loss', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;  // 从 JWT 中获取用户 ID
+  const { fund_id, current_net_value, transaction_date } = req.body;
+
+  // 参数验证
+  if (!fund_id || !current_net_value || !transaction_date) {
+    return res.error('缺少必要的字段', 400);
+  }
+
+  // 查找基金持有记录
+  const [fundRecord] = await db.query('SELECT * FROM `fund_holdings` WHERE `id` = ? AND `user_id` = ?', [fund_id, userId]);
+  if (fundRecord.length === 0) {
+    return res.error('没有权限操作该基金', 403);  // 用户没有权限操作该基金
+  }
+
+  const fund = fundRecord[0];
+  const { average_net_value, holding_shares } = fund;
+
+  // 如果当前净值小于平均净值，计算亏损（前后端同时限制）
+  if (current_net_value < average_net_value) {
+    const profit_loss = (average_net_value - current_net_value) * holding_shares;
+
+    // 1. 更新 fund_daily_profit_loss 表
+    const insertLossQuery = `
+      INSERT INTO fund_daily_profit_loss (fund_id, user_id, transaction_date, profit_loss_type, profit_loss)
+      VALUES (?, ?, ?, 1, ?)
+    `;
+    await db.query(insertLossQuery, [fund_id, userId, transaction_date, profit_loss]);
+
+    // 2. 更新 fund_daily_profit_loss_summary 表
+    const insertLossSummaryQuery = `
+      INSERT INTO fund_daily_profit_loss_summary (user_id, transaction_date, total_profit_loss_type, total_profit_loss)
+      VALUES (?, ?, 1, ?)
+    `;
+    await db.query(insertLossSummaryQuery, [userId, transaction_date, profit_loss]);
+
+    // 3. 更新 fund_holdings 表
+    const updatedHoldingAmount = (parseFloat(fund.holding_amount) - parseFloat(profit_loss)).toFixed(3);  // 更新持有金额
+    const updatedHoldingProfit = (parseFloat(fund.holding_profit) - parseFloat(profit_loss)).toFixed(3);  // 更新持有收益
+    const updatedTotalProfit = (parseFloat(fund.total_profit) - parseFloat(profit_loss)).toFixed(3);  // 更新总收益
+
+    // 计算新的持有收益率和总收益率，确保不除以零
+    const newHoldingProfitRate = updatedHoldingAmount !== 0 ? (parseFloat(updatedHoldingProfit) / parseFloat(updatedHoldingAmount)).toFixed(3) : 0; // 如果持有金额为 0，收益率设为 0
+    const newTotalProfitRate = parseFloat(fund.total_amount) !== 0 ? (parseFloat(updatedTotalProfit) / parseFloat(fund.total_amount)).toFixed(3) : 0; // 如果总金额为 0，总收益率设为 0
+
+    // 计算新的平均净值
+    let newAverageNetValue = 0;
+    if (parseFloat(fund.holding_shares) > 0) {
+      newAverageNetValue = (parseFloat(updatedHoldingAmount) / parseFloat(fund.holding_shares)).toFixed(3);  // 总金额 / 持有份额
+    }
+
+    // 更新基金持有表
+    const updateFundLossQuery = `
+      UPDATE fund_holdings
+      SET holding_amount = ?, holding_profit = ?, holding_profit_rate = ?, total_profit = ?, total_profit_rate = ?, average_net_value = ?
+      WHERE id = ?
+    `;
+    await db.query(updateFundLossQuery, [
+      updatedHoldingAmount, updatedHoldingProfit, newHoldingProfitRate, updatedTotalProfit, newTotalProfitRate, newAverageNetValue, fund_id
+    ]);
+
+    return res.success({ message: '亏损更新成功' });
+  } else {
+    return res.error('当前净值未低于平均净值，无亏损产生', 400);
   }
 }));
 
