@@ -83,10 +83,10 @@ router.post('/recipes/delete-image', asyncHandler(async (req, res) => {
 }));
 
 
-// 配置头像 multer 存储方式
+// 配置 multer 存储方式
 const storageAvatar = multer.diskStorage({
     destination: (req, file, cb) => {
-        // 图片存储目录
+        // 头像存储目录
         const uploadDir = '/www/wwwroot/crayon/static/avatar';
 
         // 确保目录存在
@@ -105,35 +105,36 @@ const storageAvatar = multer.diskStorage({
 });
 
 // 创建 multer 实例
-const uploadAvatar = multer({ storageAvatar });
-// 上传图片接口
+const uploadAvatar = multer({ storage: storageAvatar });
+
+// 上传头像接口
 router.post('/auth/uploadAvatar', uploadAvatar.single('image'), asyncHandler(async (req, res) => {
     if (!req.file) {
         return res.error('请上传图片文件', 400);
     }
+
     try {
-        // 获取图片存储的路径
+        // 获取头像存储的路径
         const imagePath = `/static/avatar/${req.file.filename}`;
 
-        // 返回图片的存储路径
+        // 返回头像的存储路径
         return res.success({
             image_path: imagePath,
             message: '头像上传成功'
         });
     } catch (error) {
-        console.error('Error uploading image:', error);
+        console.error('Error uploading avatar:', error);
         return res.error('头像上传失败，请稍后重试', 500);
     }
 }));
 
-
-// 删除图片接口
-router.post('/recipes/deleteAvatar', asyncHandler(async (req, res) => {
+// 删除头像接口
+router.post('/auth/deleteAvatar', asyncHandler(async (req, res) => {
     const { image_path } = req.body;
 
     // 校验 image_path 参数是否存在
     if (!image_path) {
-        return res.error('请提供图片路径', 400);
+        return res.error('请提供头像路径', 400);
     }
 
     try {
@@ -154,9 +155,10 @@ router.post('/recipes/deleteAvatar', asyncHandler(async (req, res) => {
             return res.error('头像文件未找到', 404);
         }
     } catch (error) {
-        console.error('Error deleting image:', error);
+        console.error('Error deleting avatar:', error);
         return res.error('头像删除失败，请稍后重试', 500);
     }
 }));
+
 
 module.exports = router;
