@@ -1,5 +1,4 @@
 const express = require('express');
-const axios = require('axios');  // 添加这行
 const router = express.Router();
 const db = require('../config/db');  // 引入数据库连接
 const { asyncHandler } = require('../middleware/errorHandler');

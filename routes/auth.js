@@ -49,9 +49,7 @@ router.post('/login', asyncHandler(async (req, res) => {
       gender,
       height,
       DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
-      avatar_url,          
-      sexual_role,         
-      penis_long, 
+      avatar_url, 
       openid
     FROM users 
     WHERE phone = ?`, 
@@ -122,8 +120,6 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
           height, 
           DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
           avatar_url,
-          sexual_role,
-          penis_long,
           openid
         FROM users 
         WHERE id = ?
@@ -155,7 +151,7 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
 // 完善资料
 router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { nickname, height, birthday, avatar_url, sexual_role, penis_long } = req.body;
+  const { nickname, height, birthday, avatar_url } = req.body;
   let gender = req.body.gender;
 
   // 处理 gender 的类型转换
@@ -176,19 +172,12 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
     return res.error('生日格式无效', 400);
   }
 
-  // 验证 penis_long 格式
-  if (penis_long !== undefined && (!Number.isInteger(Number(penis_long)) || penis_long <= 0)) {
-    return res.error('阴茎长度格式无效', 400);
-  }
-
   const updateFields = {};
   if (nickname !== undefined) updateFields.nickname = nickname;
   if (gender !== undefined) updateFields.gender = gender;
   if (height !== undefined) updateFields.height = height;
   if (birthday !== undefined) updateFields.birthday = birthday;
   if (avatar_url !== undefined) updateFields.avatar_url = avatar_url;
-  if (sexual_role !== undefined) updateFields.sexual_role = sexual_role;
-  if (penis_long !== undefined) updateFields.penis_long = penis_long;
 
   if (Object.keys(updateFields).length === 0) {
     return res.error('没有提供要更新的信息', 400);
@@ -204,7 +193,7 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   }
 
   const [rows] = await db.query(
-    'SELECT id, phone, nickname, gender, height, DATE_FORMAT(birthday, "%Y-%m-%d") as birthday, avatar_url, sexual_role, penis_long, openid FROM users WHERE id = ?',
+    'SELECT id, phone, nickname, gender, height, DATE_FORMAT(birthday, "%Y-%m-%d") as birthday, avatar_url, openid FROM users WHERE id = ?',
     [userId]
   );
 
