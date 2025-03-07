@@ -170,21 +170,22 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
   let updatedHoldingCost = parseFloat(fund.holding_cost) || 0;  // 当前单股持有成本
   let updatedTotalAmount = parseFloat(fund.total_amount) || 0;  // 总买入金额
   let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 平均净值
+  let updatedTotalCost = parseFloat(fund.total_cost) || 0; // 当前总成本
 
   // 开始事务
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
 
-    // 1. 插入买入/卖出记录到买入/卖出表
+    // 1️ 插入买入/卖出记录
     const insertQuery = `
       INSERT INTO fund_transactions (user_id, fund_id, transaction_type, shares, net_value, amount, transaction_date)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
     await connection.query(insertQuery, [userId, fund_id, transaction_type, shares, net_value, amount, transaction_date]);
 
-    // 2. 更新基金持有表
-    if (transaction_type === 'buy') { // 买入操作
+    // 2️ 处理买入和卖出
+    if (transaction_type === 'buy') { // ✅ 买入操作
       // 计算新的持有成本（加权平均）
       updatedHoldingCost = ((updatedHoldingCost * updatedShares) + (parseFloat(net_value) * parseFloat(shares))) / (updatedShares + parseFloat(shares));
 
@@ -193,8 +194,11 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       updatedAmount += parseFloat(amount); // 累加当前持有金额
       updatedShares += parseFloat(shares); // 累加持有份额
 
+      // 计算新的总成本
+      updatedTotalCost = (updatedHoldingCost * updatedShares).toFixed(2);
       // 计算新的平均净值
       updatedAverageNetValue = updatedTotalAmount / updatedShares;
+
     } else if (transaction_type === 'sell') { // 卖出操作
       // 卖出时，减少当前持有金额和份额
       if (parseFloat(shares) > updatedShares) {
@@ -204,6 +208,9 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       updatedAmount -= parseFloat(amount); // 卖出时减少金额
       updatedShares -= parseFloat(shares); // 卖出时减少份额
 
+      // 更新总成本
+      updatedTotalCost = (updatedHoldingCost * updatedShares).toFixed(2); 
+
       // 计算新的平均净值
       if (updatedShares > 0) {
         updatedAverageNetValue = updatedTotalAmount / updatedShares; // 计算新的平均净值
@@ -212,13 +219,26 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       }
     }
 
-    // 更新基金持有表
+    // 3️ 更新 `fund_holdings`
     const updateQuery = `
       UPDATE fund_holdings
-      SET holding_amount = ?, holding_shares = ?, total_amount = ?, average_net_value = ?, holding_cost = ?
+      SET holding_amount = ?, 
+          holding_shares = ?, 
+          total_amount = ?, 
+          average_net_value = ?, 
+          holding_cost = ?, 
+          total_cost = ?  
       WHERE id = ?
     `;
-    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedTotalAmount, updatedAverageNetValue, updatedHoldingCost, fund_id]);
+    await connection.query(updateQuery, [
+      updatedAmount, 
+      updatedShares, 
+      updatedTotalAmount, 
+      updatedAverageNetValue, 
+      updatedHoldingCost, 
+      updatedTotalCost,
+      fund_id
+    ]);
 
     // 提交事务
     await connection.commit();
@@ -234,6 +254,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
     connection.release();
   }
 }));
+
 
 
 // 查询某个基金的买入卖出数据列表
@@ -341,23 +362,33 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     let updatedShares = parseFloat(fund.holding_shares) || 0;   // 确保持有份额是有效数字
     let updatedHoldingCost = parseFloat(fund.holding_cost) || 0;  // 当前持有成本
     let updatedAverageNetValue = parseFloat(fund.average_net_value) || 0;  // 确保平均净值是有效数字
+    let updatedTotalAmount = parseFloat(fund.total_amount) || 0;  // 确保总金额是有效数字
+    let updatedTotalCost = parseFloat(fund.total_cost) || 0;  // 确保总成本是有效数字
 
-    if (transaction_type === 'buy') { // 如果是买入记录，删除时减少金额和份额
-      updatedAmount -= parseFloat(amount); // 减少金额
-      updatedShares -= parseFloat(shares); // 减少份额
-
+    if (transaction_type === 'buy') { // 如果是买入记录，之前加了，删除时就应该减少
+      updatedAmount -= parseFloat(amount); // 减少持有金额
+      updatedShares -= parseFloat(shares); // 减少持有份额
+      updatedTotalAmount -= parseFloat(amount); // 从总投入中减去已删除的买入金额
+    
       // 计算已删除的买入份额成本
       const deletedHoldingCost = parseFloat(amount) / parseFloat(shares);  // 每股的成本
       const remainingShares = updatedShares;
+    
+      // 处理 `remainingShares == 0`，防止 `NaN`
+      if (remainingShares > 0) {
+        updatedHoldingCost = ((updatedHoldingCost * (updatedShares + parseFloat(shares))) - (deletedHoldingCost * parseFloat(shares))) / remainingShares;
+      } else {
+        updatedHoldingCost = 0;
+      }
+  
+      updatedTotalCost = (updatedHoldingCost * updatedShares).toFixed(2); // 重新计算 `total_cost`
 
-      // 新的持有成本 = （当前持有成本 * 当前份额 - 已删除买入份额的成本）/ 剩余份额
-      updatedHoldingCost = ((updatedHoldingCost * (updatedShares + parseFloat(shares))) - (deletedHoldingCost * parseFloat(shares))) / remainingShares;
-
-    } else if (transaction_type === 'sell') { // 如果是卖出记录，删除时增加金额和份额
+      
+    } else if (transaction_type === 'sell') { // 如果是卖出记录，之前减了，删除时就应该增加
       updatedAmount += parseFloat(amount); // 增加金额
       updatedShares += parseFloat(shares); // 增加份额
-
-      // 卖出时，持有成本保持不变
+      updatedTotalAmount += parseFloat(amount); // 从总投入中减去已删除的卖出金额
+      updatedTotalCost = (updatedHoldingCost * updatedShares).toFixed(2); // 重新计算 `total_cost`
     }
 
     // 重新计算平均净值：如果份额为 0，则设置为 0
@@ -370,7 +401,7 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     // 3. 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET holding_amount = ?, holding_shares = ?, average_net_value = ?, holding_cost = ?
+      SET holding_amount = ?, holding_shares = ?, average_net_value = ?, holding_cost = ?, total_amount = ?, total_cost = ?
       WHERE id = ?
     `;
     await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, updatedHoldingCost, fund_id]);
@@ -390,19 +421,18 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
   }
 }));
 
-
 // 更新盈亏
 router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
-  const userId = req.auth.userId;  // 获取用户 ID
+  const userId = req.auth.userId;
   const { fund_id, price_change_percentage, transaction_date } = req.body;
-  // 参数验证
-  if (!fund_id || !price_change_percentage || !transaction_date) {
+
+  if (!fund_id || price_change_percentage === undefined || !transaction_date) {
     return res.error('缺少必要的字段', 400);
   }
 
   // 查询基金持有数据
   const [fundRecord] = await db.query(
-    'SELECT * FROM `fund_holdings` WHERE `id` = ? AND `user_id` = ?',
+    'SELECT * FROM `fund_holdings` WHERE `id` = ? AND `user_id` = ?', 
     [fund_id, userId]
   );
   if (fundRecord.length === 0) {
@@ -423,14 +453,12 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
   await db.query(insertProfitQuery, [fund_id, userId, transaction_date, profit_loss, parseFloat(price_change_percentage)]);
 
   // 2️ 更新 `fund_daily_profit_loss_summary`
-  // 先查询当天是否已有数据
   const [existingSummary] = await db.query(
     'SELECT total_profit_loss FROM fund_daily_profit_loss_summary WHERE user_id = ? AND transaction_date = ?',
     [userId, transaction_date]
   );
 
   if (existingSummary.length > 0) {
-    // 如果已存在数据，执行 UPDATE
     const updateUserProfitQuery = `
       UPDATE fund_daily_profit_loss_summary
       SET total_profit_loss = total_profit_loss + ?
@@ -438,7 +466,6 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
     `;
     await db.query(updateUserProfitQuery, [profit_loss, userId, transaction_date]);
   } else {
-    // 如果当日没有数据，执行 INSERT
     const insertUserProfitQuery = `
       INSERT INTO fund_daily_profit_loss_summary (user_id, transaction_date, total_profit_loss)
       VALUES (?, ?, ?)
@@ -450,11 +477,16 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
   const updatedHoldingAmount = (parseFloat(fund.holding_amount) + profit_loss).toFixed(2);
   const updatedHoldingProfit = (parseFloat(fund.holding_profit) + profit_loss).toFixed(2);
   const updatedTotalProfit = (parseFloat(fund.total_profit) + profit_loss).toFixed(2);
-  const updatedTotalAmount = (parseFloat(fund.total_amount) + profit_loss).toFixed(2);
 
-  // 计算新的持有收益率和总收益率，防止除零错误
-  const newHoldingProfitRate = (fund.holding_cost * fund.holding_shares) !== 0 ? (updatedHoldingProfit / (fund.holding_cost * fund.holding_shares)).toFixed(4) : 0;
-  const newTotalProfitRate = updatedTotalAmount != 0 ? (updatedTotalProfit / updatedTotalAmount).toFixed(4) : 0;
+  // 修改持有收益率的计算方式，防止除零
+  const newHoldingProfitRate = fund.total_cost && parseFloat(fund.total_cost) !== 0 
+    ? Math.min(Math.max((updatedHoldingProfit / fund.total_cost), -9999), 9999).toFixed(4)  // 限制在 ±9999 范围内
+    : 0;
+
+  // 修改总收益率的计算方式，防止除零
+  const newTotalProfitRate = fund.total_amount && parseFloat(fund.total_amount) !== 0 
+    ? Math.min(Math.max((updatedTotalProfit / fund.total_amount), -9999), 9999).toFixed(4)  // 限制在 ±9999 范围内
+    : 0;
 
   // 计算新的平均净值（防止除零错误）
   let newAverageNetValue = 0;
@@ -468,7 +500,6 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
     SET holding_amount = ?, 
         holding_profit = ?, 
         holding_profit_rate = ?, 
-        total_amount = ?, 
         total_profit = ?, 
         total_profit_rate = ?, 
         average_net_value = ?
@@ -479,7 +510,6 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
     updatedHoldingAmount,
     updatedHoldingProfit,
     newHoldingProfitRate,
-    updatedTotalAmount,
     updatedTotalProfit,
     newTotalProfitRate,
     newAverageNetValue,
@@ -488,6 +518,7 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
 
   return res.success({ message: '盈亏更新成功' });
 }));
+
 
 
 // 删除收益接口
@@ -529,7 +560,6 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
   const updatedHoldingAmount = (parseFloat(fund.holding_amount) - profit_loss).toFixed(2);
   const updatedHoldingProfit = (parseFloat(fund.holding_profit) - profit_loss).toFixed(2);
   const updatedTotalProfit = (parseFloat(fund.total_profit) - profit_loss).toFixed(2);
-  const updatedTotalAmount = (parseFloat(fund.total_amount) - profit_loss).toFixed(2); // 总金额不变
 
   // 计算新的持有收益率，防止除零错误
   const newHoldingProfitRate = (fund.holding_cost * fund.holding_shares) !== 0
@@ -537,8 +567,8 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
     : 0;
 
   // 计算新的总收益率，防止除零错误
-  const newTotalProfitRate = updatedTotalAmount != 0
-    ? (updatedTotalProfit / updatedTotalAmount).toFixed(4)
+  const newTotalProfitRate = fund.total_amount != 0
+    ? (updatedTotalProfit / fund.total_amount).toFixed(4)
     : 0;
 
   // 计算新的平均净值（防止除零错误）
@@ -559,7 +589,6 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
           holding_profit = ?, 
           holding_profit_rate = ?, 
           total_profit = ?, 
-          total_amount = ?,
           total_profit_rate = ?, 
           average_net_value = ?
       WHERE id = ?
@@ -569,7 +598,6 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
       updatedHoldingProfit,
       newHoldingProfitRate,
       updatedTotalProfit,
-      updatedTotalAmount,
       newTotalProfitRate,
       newAverageNetValue,
       fund_id
