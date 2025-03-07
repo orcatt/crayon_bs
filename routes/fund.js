@@ -197,7 +197,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       // 计算新的总成本
       updatedTotalCost = (updatedHoldingCost * updatedShares).toFixed(2);
       // 计算新的平均净值
-      updatedAverageNetValue = updatedTotalAmount / updatedShares;
+      updatedAverageNetValue = updatedAmount / updatedShares;
 
     } else if (transaction_type === 'sell') { // 卖出操作
       // 卖出时，减少当前持有金额和份额
@@ -213,7 +213,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 
       // 计算新的平均净值
       if (updatedShares > 0) {
-        updatedAverageNetValue = updatedTotalAmount / updatedShares; // 计算新的平均净值
+        updatedAverageNetValue = updatedAmount / updatedShares; // 计算新的平均净值
       } else {
         updatedAverageNetValue = 0; // 如果份额为 0，平均净值设置为 0
       }
@@ -401,10 +401,23 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     // 3. 更新基金持有表
     const updateQuery = `
       UPDATE fund_holdings
-      SET holding_amount = ?, holding_shares = ?, average_net_value = ?, holding_cost = ?, total_amount = ?, total_cost = ?
+      SET holding_amount = ?, 
+          holding_shares = ?, 
+          average_net_value = ?, 
+          holding_cost = ?, 
+          total_amount = ?, 
+          total_cost = ?
       WHERE id = ?
     `;
-    await connection.query(updateQuery, [updatedAmount, updatedShares, updatedAverageNetValue, updatedHoldingCost, fund_id]);
+    await connection.query(updateQuery, [
+      updatedAmount,
+      updatedShares,
+      updatedAverageNetValue,
+      updatedHoldingCost,
+      updatedTotalAmount, // 确保 total_amount 传入
+      updatedTotalCost, // 确保 total_cost 传入
+      fund_id
+    ]);
 
     // 提交事务
     await connection.commit();
@@ -420,6 +433,7 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
     connection.release();
   }
 }));
+
 
 // 更新盈亏
 router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
@@ -629,6 +643,7 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
     connection.release();
   }
 }));
+
 
 // 获取某基金的月度每日收益列表
 router.post('/holdingShares/profitList', asyncHandler(async (req, res) => {
