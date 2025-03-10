@@ -3,7 +3,6 @@ const router = express.Router();
 const db = require('../config/db');  // 引入数据库连接
 const { asyncHandler } = require('../middleware/errorHandler');
 
-
 // 获取基金列表（含当日收益 & 盈亏率）
 router.post('/holdingShares/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;  // 获取用户 ID
@@ -15,7 +14,7 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
   }
 
   try {
-    // 1️ 查询基金持有数据
+    // 查询基金持有数据
     const [funds] = await db.query(
       'SELECT * FROM `fund_holdings` WHERE `user_id` = ?',
       [userId]
@@ -25,26 +24,20 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
       return res.success([], '未找到持有的基金');
     }
 
-    // 2️ 查询基金当日盈亏（fund_daily_profit_loss）
-    const [profitLossData] = await db.query(
-      'SELECT fund_id, profit_loss, price_change_percentage FROM `fund_daily_profit_loss` WHERE `user_id` = ? AND `transaction_date` = ?',
+    // 查询基金当日盈亏数据，并格式化 transaction_date
+    const [dailyProfitLoss] = await db.query(
+      `SELECT id, fund_id, user_id, 
+        DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date, 
+        profit_loss, price_change_percentage 
+        FROM fund_daily_profit_loss 
+      WHERE user_id = ? AND transaction_date = ?`,
       [userId, transaction_date]
     );
 
-    // 3️ 构建基金 ID -> 当日收益 & 盈亏率的映射
-    const profitLossMap = {};
-    profitLossData.forEach(row => {
-      profitLossMap[row.fund_id] = {
-        profit_loss: row.profit_loss,
-        price_change_percentage: row.price_change_percentage
-      };
-    });
-
-    // 4️ 合并基金数据 & 当日收益 & 盈亏率
+    // 构建基金列表，直接附加 dailyData
     const enrichedFunds = funds.map(fund => ({
       ...fund,
-      daily_profit_loss: profitLossMap[fund.id]?.profit_loss || 0,  // 默认 0
-      price_change_percentage: profitLossMap[fund.id]?.price_change_percentage || 0 // 默认 0
+      dailyData: dailyProfitLoss.find(d => d.fund_id === fund.id) || {} // 若无数据，则为空对象
     }));
 
     return res.success(enrichedFunds, '基金列表获取成功');
@@ -54,6 +47,7 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
     return res.error('基金列表获取失败，请稍后重试', 500);
   }
 }));
+
 
 
 
