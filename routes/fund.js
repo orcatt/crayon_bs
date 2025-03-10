@@ -250,57 +250,46 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 }));
 
 
-
 // 查询某个基金的买入卖出数据列表
 router.post('/holdingTransactions/list', asyncHandler(async (req, res) => {
-  const { fund_id, start_date, end_date } = req.body;
+  const { fund_id, transaction_date } = req.body;  // 改为接收 transaction_date（YYYY-MM）
 
   // 获取当前用户的ID
-  const userId = req.auth.userId; // 假设用户ID存储在请求的auth中
+  const userId = req.auth.userId;
 
   // 参数验证
-  if (!fund_id) {
-    return res.error('缺少基金 ID', 400);
+  if (!fund_id || !transaction_date) {
+    return res.error('缺少必要的字段', 400);
   }
 
   // 查找基金持有记录，验证该基金是否属于当前用户
   const [fundRecord] = await db.query('SELECT * FROM fund_holdings WHERE id = ? AND user_id = ?', [fund_id, userId]);
   if (fundRecord.length === 0) {
-    return res.error('没有权限查询该基金', 403); // 用户没有权限查询该基金的交易记录
+    return res.error('没有权限查询该基金', 403);
   }
-
-  // 构建查询条件
-  const queryParams = [fund_id];
-
-  // 如果提供了 start_date 和 end_date，则添加日期范围条件
-  let query = `
-    SELECT 
-      id,
-      fund_id,
-      transaction_type,
-      shares,
-      net_value,
-      amount,
-      transaction_date
-    FROM fund_transactions
-    WHERE fund_id = ?
-  `;
-
-  // 如果有日期范围参数，则添加 WHERE 条件
-  if (start_date && end_date) {
-    query += ` AND transaction_date BETWEEN ? AND ?`;
-    queryParams.push(start_date, end_date);
-  }
-
-  query += ` ORDER BY transaction_date DESC;`;  // 按日期降序排序
 
   try {
-    // 执行查询
-    const [rows] = await db.query(query, queryParams);
+    // 查询基金当月买入卖出记录，并格式化日期
+    const [rows] = await db.query(
+      `SELECT 
+        id,
+        fund_id,
+        transaction_type,
+        shares,
+        net_value,
+        amount,
+        DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date
+      FROM fund_transactions 
+      WHERE fund_id = ? 
+      AND user_id = ?
+      AND DATE_FORMAT(transaction_date, '%Y-%m') = ? 
+      ORDER BY transaction_date DESC`,
+      [fund_id, userId, transaction_date]  // 添加 userId 参数
+    );
 
     // 如果没有找到数据，返回一个空数组
     if (rows.length === 0) {
-      return res.success([], '未找到该时间范围内的买入卖出记录');
+      return res.success([], '未找到该月份的买入卖出记录');
     }
 
     // 返回查询到的数据
