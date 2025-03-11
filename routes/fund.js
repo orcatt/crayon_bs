@@ -641,7 +641,8 @@ router.post('/holdingShares/profitList', asyncHandler(async (req, res) => {
   try {
     // 1️ 查询基金当月每日收益，并格式化日期
     const [profitLossData] = await db.query(
-      `SELECT DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date, 
+      `SELECT id,
+        DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date, 
         profit_loss, 
         price_change_percentage 
         FROM fund_daily_profit_loss 
@@ -672,21 +673,58 @@ router.post('/holdingShares/userProfitList', asyncHandler(async (req, res) => {
   }
 
   try {
-    // 查询用户当月每日收益，并格式化日期
-    const [profitLossData] = await db.query(
-      `SELECT DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date, 
+    // 1. 查询用户当月每日总收益
+    const [summaryData] = await db.query(
+      `SELECT 
+        DATE_FORMAT(transaction_date, '%Y-%m-%d') AS transaction_date, 
         total_profit_loss 
-        FROM fund_daily_profit_loss_summary 
-        WHERE user_id = ? 
-        AND DATE_FORMAT(transaction_date, '%Y-%m') = ? 
-        ORDER BY transaction_date ASC`,
+      FROM fund_daily_profit_loss_summary 
+      WHERE user_id = ? 
+      AND DATE_FORMAT(transaction_date, '%Y-%m') = ? 
+      ORDER BY transaction_date ASC`,
       [userId, transaction_date]
     );
 
-    return res.success(profitLossData, '用户收益列表获取成功');
+    // 2. 查询每日收益的详细构成（添加 id 字段）
+    const [detailsData] = await db.query(
+      `SELECT 
+        fdpl.id,
+        fdpl.transaction_date,
+        DATE_FORMAT(fdpl.transaction_date, '%Y-%m-%d') AS formatted_date,
+        fdpl.fund_id,
+        fh.fund_name,
+        fdpl.profit_loss,
+        fdpl.price_change_percentage
+      FROM fund_daily_profit_loss fdpl
+      JOIN fund_holdings fh ON fdpl.fund_id = fh.id
+      WHERE fdpl.user_id = ? 
+      AND DATE_FORMAT(fdpl.transaction_date, '%Y-%m') = ? 
+      ORDER BY fdpl.transaction_date ASC, fh.fund_name ASC`,
+      [userId, transaction_date]
+    );
+
+    // 3. 组织返回数据结构（在 details 中添加 id）
+    const result = summaryData.map(summary => {
+      const dateStr = summary.transaction_date;
+      return {
+        transaction_date: dateStr,
+        total_profit_loss: summary.total_profit_loss,
+        details: detailsData
+          .filter(detail => detail.formatted_date === dateStr)
+          .map(detail => ({
+            id: detail.id,  // 添加 id 字段
+            fund_id: detail.fund_id,
+            fund_name: detail.fund_name,
+            profit_loss: detail.profit_loss,
+            price_change_percentage: detail.price_change_percentage
+          }))
+      };
+    });
+
+    return res.success(result, '用户收益列表获取成功');
 
   } catch (error) {
-    console.error(error);
+    console.error('查询用户收益列表失败:', error);
     return res.error('用户收益列表获取失败，请稍后重试', 500);
   }
 }));
