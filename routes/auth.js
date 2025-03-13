@@ -49,8 +49,9 @@ router.post('/login', asyncHandler(async (req, res) => {
       gender,
       height,
       DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
-      avatar_url, 
-      openid
+      avatar_url,
+      openid,
+      total_assets_user
     FROM users 
     WHERE phone = ?`, 
     [phone]
@@ -120,7 +121,8 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
           height, 
           DATE_FORMAT(birthday, '%Y-%m-%d') as birthday,
           avatar_url,
-          openid
+          openid,
+          total_assets_user
         FROM users 
         WHERE id = ?
       `, [user.id]);
@@ -151,7 +153,7 @@ router.post('/wechat-login', asyncHandler(async (req, res) => {
 // 完善资料
 router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { nickname, height, birthday, avatar_url } = req.body;
+  const { nickname, height, birthday, avatar_url, total_assets_user } = req.body;
   let gender = req.body.gender;
 
   // 处理 gender 的类型转换
@@ -178,6 +180,7 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   if (height !== undefined) updateFields.height = height;
   if (birthday !== undefined) updateFields.birthday = birthday;
   if (avatar_url !== undefined) updateFields.avatar_url = avatar_url;
+  if (total_assets_user !== undefined) updateFields.total_assets_user = total_assets_user;
 
   if (Object.keys(updateFields).length === 0) {
     return res.error('没有提供要更新的信息', 400);
@@ -193,7 +196,7 @@ router.post('/updateUserInfo', asyncHandler(async (req, res) => {
   }
 
   const [rows] = await db.query(
-    'SELECT id, phone, nickname, gender, height, DATE_FORMAT(birthday, "%Y-%m-%d") as birthday, avatar_url, openid FROM users WHERE id = ?',
+    'SELECT id, phone, nickname, gender, height, DATE_FORMAT(birthday, "%Y-%m-%d") as birthday, avatar_url, openid, total_assets_user FROM users WHERE id = ?',
     [userId]
   );
 
