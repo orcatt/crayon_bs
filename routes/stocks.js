@@ -20,8 +20,9 @@ router.post('/trade30', asyncHandler(async (req, res) => {
 
   try {
     // 调用 Python 脚本获取股票数据
+    const pythonExecutable = path.join(__dirname, '../venv/bin/python');  // 确保使用虚拟环境中的 Python
     const pythonScript = path.join(__dirname, '../scripts/code_trade_30.py');  // Python 脚本路径
-    exec(`python3 ${pythonScript} ${stock_code} ${start_date_formatted} ${end_date_formatted}`, (error, stdout, stderr) => {
+    exec(`${pythonExecutable} ${pythonScript} ${stock_code} ${start_date_formatted} ${end_date_formatted}`, (error, stdout, stderr) => {
       if (error) {
         console.error(`执行 Python 脚本出错: ${error.message}`);
         return res.error('股票数据获取失败', 500);
@@ -69,8 +70,9 @@ router.post('/inflow5', asyncHandler(async (req, res) => {
 
   try {
     // 调用 Python 脚本获取股票数据
+    const pythonExecutable = path.join(__dirname, '../venv/bin/python');  // 确保使用虚拟环境中的 Python
     const pythonScript = path.join(__dirname, '../scripts/code_Inflow_5.py');
-    exec(`python3 ${pythonScript} ${stock_code} ${start_date_formatted} ${end_date_formatted}`, (error, stdout, stderr) => {
+    exec(`${pythonExecutable} ${pythonScript} ${stock_code} ${start_date_formatted} ${end_date_formatted}`, (error, stdout, stderr) => {
       if (error) {
         console.error(`执行 Python 脚本出错: ${error.message}`);
         return res.error('股票数据获取失败', 500);
