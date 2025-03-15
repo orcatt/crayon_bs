@@ -113,8 +113,9 @@ router.post('/inflowDay', asyncHandler(async (req, res) => {
 
   try {
     // 调用 Python 脚本获取股票数据
+    const pythonExecutable = path.join(__dirname, '../venv/bin/python');  // 确保使用虚拟环境中的 Python
     const pythonScript = path.join(__dirname, '../scripts/code_Inflow_day.py');
-    exec(`python3 ${pythonScript} ${stock_code}`, (error, stdout, stderr) => {
+    exec(`${pythonExecutable} ${pythonScript} ${stock_code}`, (error, stdout, stderr) => {
       if (error) {
         console.error(`执行 Python 脚本出错: ${error.message}`);
         return res.error('股票数据获取失败', 500);
