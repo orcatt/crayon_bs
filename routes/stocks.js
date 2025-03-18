@@ -295,4 +295,53 @@ router.post('/inflowMinuteCalculate', asyncHandler(async (req, res) => {
   }
 }));
 
+// 获取股票支撑阻力位数据
+router.post('/supportResistance', asyncHandler(async (req, res) => {
+  const { stock_code, start_date, end_date } = req.body;
+
+  // 参数验证
+  if (!stock_code || !start_date || !end_date) {
+    return res.error('缺少必要的字段: stock_code, start_date, end_date', 400);
+  }
+
+  // 将 yyyy-mm-dd 格式转换为 yyyymmdd 格式
+  const start_date_formatted = start_date.replace(/-/g, '');
+  const end_date_formatted = end_date.replace(/-/g, '');
+
+  try {
+    // 调用 Python 脚本获取股票数据
+    const pythonExecutable = path.join(__dirname, '../venv/bin/python');
+    const pythonScript = path.join(__dirname, '../scripts/support_resistance.py');
+    exec(`${pythonExecutable} ${pythonScript} ${stock_code} ${start_date_formatted} ${end_date_formatted}`, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`执行 Python 脚本出错: ${error.message}`);
+        return res.error('股票数据获取失败', 500);
+      }
+      if (stderr) {
+        console.error(`Python 脚本错误: ${stderr}`);
+        return res.error('股票数据获取失败', 500);
+      }
+
+      try {
+        const stockData = JSON.parse(stdout.trim());
+
+        // 确保 stockData 格式正确
+        if (!stockData || !stockData.list) {
+          return res.error('无效的股票数据', 500);
+        }
+
+        // 返回股票数据
+        return res.success(stockData, '股票数据获取成功');
+      } catch (parseError) {
+        console.error('JSON 解析错误:', parseError);
+        return res.error('数据解析失败', 500);
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.error('股票数据获取失败，请稍后重试', 500);
+  }
+}));
+
 module.exports = router
