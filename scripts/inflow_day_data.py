@@ -2,6 +2,7 @@ import sys
 import json
 import efinance as ef
 import pandas as pd
+import numpy as np
 
 def fetch_stock_data(stock_code, start_date, end_date):
     # 获取股票历史单子流入数据
@@ -18,8 +19,24 @@ def fetch_stock_data(stock_code, start_date, end_date):
     mask = (stock_df['日期'] >= start_date) & (stock_df['日期'] <= end_date)
     filtered_df = stock_df.loc[mask].copy()
     
-    # 按日期升序排序
-    filtered_df = filtered_df.sort_values(by='日期', ascending=True)
+    # 按日期升序排序并重置索引
+    filtered_df = filtered_df.sort_values(by='日期', ascending=True).reset_index(drop=True)
+    
+    # 计算总净流入
+    filtered_df['总净流入'] = (filtered_df['主力净流入'] + filtered_df['小单净流入'] + 
+                          filtered_df['中单净流入'] + filtered_df['大单净流入'] + 
+                          filtered_df['超大单净流入'])
+    
+    # 计算各类型流入占总流入的实际比例
+    total_abs_flow = filtered_df[['主力净流入', '小单净流入', '中单净流入', 
+                                 '大单净流入', '超大单净流入']].abs().sum(axis=1)
+    
+    # 重新计算占比，确保总和为1
+    filtered_df['主力净流入占比'] = (filtered_df['主力净流入'] / total_abs_flow * 100).round(2)
+    filtered_df['小单流入净占比'] = (filtered_df['小单净流入'] / total_abs_flow * 100).round(2)
+    filtered_df['中单流入净占比'] = (filtered_df['中单净流入'] / total_abs_flow * 100).round(2)
+    filtered_df['大单流入净占比'] = (filtered_df['大单净流入'] / total_abs_flow * 100).round(2)
+    filtered_df['超大单流入净占比'] = (filtered_df['超大单净流入'] / total_abs_flow * 100).round(2)
     
     # 将日期转换为指定格式的字符串
     filtered_df['日期'] = filtered_df['日期'].dt.strftime('%Y-%m-%d')

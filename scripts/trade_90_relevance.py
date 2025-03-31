@@ -37,9 +37,11 @@ def fetch_and_calculate_relevance(stock_code, index_code, start_date, end_date):
             loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
             rs = gain / loss
             return 100 - (100 / (1 + rs))
-        
-        merged_df['rsi'] = calculate_rsi(merged_df['收盘_stock'])
-        
+
+        # 计算 ETF 和大盘的 RSI
+        merged_df['rsi_stock'] = calculate_rsi(merged_df['收盘_stock'])
+        merged_df['rsi_index'] = calculate_rsi(merged_df['收盘_index'])
+
         # 准备结果数据
         result_df = pd.DataFrame({
             '日期': merged_df['日期'],
@@ -47,7 +49,8 @@ def fetch_and_calculate_relevance(stock_code, index_code, start_date, end_date):
             '指数收盘': merged_df['收盘_index'],
             'Alpha': merged_df['alpha'].round(4),
             '相关性': merged_df['correlation'].round(4),
-            'RSI': merged_df['rsi'].round(2)
+            'RSI_ETF': merged_df['rsi_stock'].round(2),
+            'RSI_大盘': merged_df['rsi_index'].round(2)
         })
         
         # 去除 NaN 数据
