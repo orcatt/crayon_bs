@@ -12,3 +12,6 @@ miniprogram_npm/
 
 # Node.js
 node_modules/
+
+# Python virtual environment
+venv/
