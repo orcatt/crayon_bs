@@ -34,7 +34,19 @@ router.post('/tradeList', asyncHandler(async (req, res) => {
 
       try {
         // 解析 Python 脚本返回的结果
-        const stockData = JSON.parse(stdout.trim());  // 确保 stdout 是 JSON 格式
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -84,7 +96,19 @@ router.post('/tradeCalculate', asyncHandler(async (req, res) => {
 
       try {
         // 解析 Python 脚本返回的结果
-        const stockData = JSON.parse(stdout.trim());  // 确保 stdout 是 JSON 格式
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -134,7 +158,20 @@ router.post('/tradeRelevance', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -183,7 +220,20 @@ router.post('/inflowDayList', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());  // 确保 stdout 是 JSON 格式
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -232,7 +282,20 @@ router.post('/inflowDayCalculate', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());  // 确保 stdout 是 JSON 格式
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -277,7 +340,20 @@ router.post('/inflowMinuteList', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -323,7 +399,20 @@ router.post('/inflowMinuteCalculate', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
@@ -372,7 +461,20 @@ router.post('/supportResistance', asyncHandler(async (req, res) => {
       }
 
       try {
-        const stockData = JSON.parse(stdout.trim());
+        // 解析 Python 脚本返回的结果
+        const output = stdout.trim();
+        
+        // 检查输出中是否包含证券代码错误的信息
+        if (output.includes('证券代码') && output.includes('可能有误')) {
+          return res.error('无效的证券代码', 500);
+        }
+        
+        const stockData = JSON.parse(output);  // 确保 stdout 是 JSON 格式
+
+        // 检查是否有错误信息
+        if (stockData.error) {
+          return res.error(stockData.error, 500);
+        }
 
         // 确保 stockData 格式正确
         if (!stockData || !stockData.list) {
