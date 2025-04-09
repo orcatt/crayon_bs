@@ -849,12 +849,31 @@ router.post('/userWeight/update', asyncHandler(async (req, res) => {
 // 获取菜谱列表
 router.post('/recipes/list', asyncHandler(async (req, res) => {
   const { page = 1, limit = 10 } = req.body;
-  const userId = req.auth.userId; // 假设通过认证中间件获取当前用户ID
+  const userId = req.auth.userId;
 
   // 计算分页偏移量
   const offset = (page - 1) * limit;
 
   try {
+      // 1. 先获取符合条件的菜谱ID列表
+      const recipeQuery = `
+          SELECT id 
+          FROM recipes 
+          WHERE user_id = ? 
+          ORDER BY is_pinned DESC, created_at DESC 
+          LIMIT ? OFFSET ?
+      `;
+      const [recipeIds] = await db.query(recipeQuery, [userId, parseInt(limit), offset]);
+      
+      if (recipeIds.length === 0) {
+          return res.success({
+              data: [],
+              message: '暂无菜谱数据'
+          });
+      }
+
+      // 2. 获取这些菜谱的详细信息
+      const recipeIdsArray = recipeIds.map(r => r.id);
       const query = `
           SELECT
               r.id AS recipe_id,
@@ -863,87 +882,81 @@ router.post('/recipes/list', asyncHandler(async (req, res) => {
               r.rating,
               r.image_path,
               r.is_pinned,
-              ri.id AS ingredient_id,
-              ri.name AS ingredient_name,
-              ri.quantity,
-              ri.unit,
-              ri.sort_order AS ingredient_sort_order,
-              rs.id AS step_id,
-              rs.step_number,
-              rs.content AS step_content,
-              rs.image_path AS step_image_path
+              r.created_at,
+              r.updated_at,
+              CONCAT('[', 
+                  GROUP_CONCAT(
+                      DISTINCT 
+                      JSON_OBJECT(
+                          'ingredient_id', ri.id,
+                          'ingredient_name', ri.name,
+                          'quantity', ri.quantity,
+                          'unit', ri.unit,
+                          'sort_order', ri.sort_order
+                      )
+                      SEPARATOR ','
+                  ),
+              ']') as ingredients,
+              CONCAT('[', 
+                  GROUP_CONCAT(
+                      DISTINCT 
+                      JSON_OBJECT(
+                          'step_id', rs.id,
+                          'step_number', rs.step_number,
+                          'content', rs.content,
+                          'image_path', rs.image_path
+                      )
+                      SEPARATOR ','
+                  ),
+              ']') as steps
           FROM recipes r
           LEFT JOIN recipes_ingredients ri ON r.id = ri.recipe_id
           LEFT JOIN recipes_steps rs ON r.id = rs.recipe_id
-          WHERE r.user_id = ?
-          ORDER BY r.is_pinned DESC, r.created_at DESC, ri.sort_order ASC, rs.step_number ASC
-          LIMIT ? OFFSET ?
+          WHERE r.id IN (?)
+          GROUP BY r.id
+          ORDER BY r.is_pinned DESC, r.created_at DESC
       `;
       
-      // 执行查询
-      const [rows] = await db.query(query, [userId, parseInt(limit), offset]);
+      const [rows] = await db.query(query, [recipeIdsArray]);
 
-      // 对查询结果进行处理，将食材和步骤数据嵌套到每个菜谱对象中
-      const result = rows.reduce((acc, row) => {
-          const {
-              recipe_id,
-              recipe_name,
-              tags,
-              rating,
-              image_path,
-              is_pinned,
-              ingredient_id,
-              ingredient_name,
-              quantity,
-              unit,
-              ingredient_sort_order,
-              step_id,
-              step_number,
-              step_content,
-              step_image_path
-          } = row;
+      // 处理结果，将JSON字符串转换为对象
+      const result = rows.map(row => {
+          const recipe = {
+              recipe_id: row.recipe_id,
+              recipe_name: row.recipe_name,
+              tags: row.tags,
+              rating: row.rating,
+              image_path: row.image_path,
+              is_pinned: row.is_pinned,
+              created_at: row.created_at,
+              updated_at: row.updated_at,
+              ingredients: [],
+              steps: []
+          };
 
-          // 如果菜谱不在列表中，先创建它
-          let recipe = acc.find(r => r.recipe_id === recipe_id);
-          if (!recipe) {
-              recipe = {
-                  recipe_id,
-                  recipe_name,
-                  tags,
-                  rating,
-                  image_path,
-                  is_pinned,
-                  ingredients: [],
-                  steps: []
-              };
-              acc.push(recipe);
+          // 处理食材数据
+          if (row.ingredients && row.ingredients !== '[]') {
+              try {
+                  recipe.ingredients = JSON.parse(row.ingredients)
+                      .sort((a, b) => a.sort_order - b.sort_order);
+              } catch (e) {
+                  console.error('Error parsing ingredients:', e);
+              }
           }
 
-          // 检查食材是否已添加，避免重复添加
-          if (ingredient_id && !recipe.ingredients.some(i => i.ingredient_id === ingredient_id)) {
-              recipe.ingredients.push({
-                  ingredient_id,
-                  ingredient_name,
-                  quantity,
-                  unit,
-                  ingredient_sort_order
-              });
+          // 处理步骤数据
+          if (row.steps && row.steps !== '[]') {
+              try {
+                  recipe.steps = JSON.parse(row.steps)
+                      .sort((a, b) => a.step_number - b.step_number);
+              } catch (e) {
+                  console.error('Error parsing steps:', e);
+              }
           }
 
-          // 检查步骤是否已添加，避免重复添加
-          if (step_id && !recipe.steps.some(s => s.step_id === step_id)) {
-              recipe.steps.push({
-                  step_id,
-                  step_number,
-                  step_content,
-                  step_image_path
-              });
-          }
+          return recipe;
+      });
 
-          return acc;
-      }, []);
-
-      // 返回最终数据
       return res.success({
           data: result,
           message: '菜品列表获取成功'
