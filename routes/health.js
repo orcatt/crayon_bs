@@ -849,6 +849,7 @@ router.post('/userWeight/update', asyncHandler(async (req, res) => {
 // 获取菜谱列表
 router.post('/recipes/list', asyncHandler(async (req, res) => {
   const { page = 1, limit = 10 } = req.body;
+  const userId = req.auth.userId; // 假设通过认证中间件获取当前用户ID
 
   // 计算分页偏移量
   const offset = (page - 1) * limit;
@@ -874,12 +875,13 @@ router.post('/recipes/list', asyncHandler(async (req, res) => {
           FROM recipes r
           LEFT JOIN recipes_ingredients ri ON r.id = ri.recipe_id
           LEFT JOIN recipes_steps rs ON r.id = rs.recipe_id
+          WHERE r.user_id = ?
           ORDER BY r.is_pinned DESC, r.created_at DESC, ri.sort_order ASC, rs.step_number ASC
           LIMIT ? OFFSET ?
       `;
       
       // 执行查询
-      const [rows] = await db.query(query, [parseInt(limit), offset]);
+      const [rows] = await db.query(query, [userId, parseInt(limit), offset]);
 
       // 对查询结果进行处理，将食材和步骤数据嵌套到每个菜谱对象中
       const result = rows.reduce((acc, row) => {
@@ -956,33 +958,49 @@ router.post('/recipes/list', asyncHandler(async (req, res) => {
 // 新增菜谱
 router.post('/recipes/add', asyncHandler(async (req, res) => {
   const { name, tags, rating, image_path, is_pinned } = req.body;
+  const userId = req.auth.userId;
 
   // 参数校验
   if (!name || rating === undefined) {
       return res.error('菜名和喜爱程度为必填项', 400);
   }
 
-  // 如果传入置顶，则先取消其他菜谱的置顶状态
   const connection = await db.getConnection();
   try {
       await connection.beginTransaction();
 
       if (is_pinned) {
-          const unpinQuery = 'UPDATE recipes SET is_pinned = 0 WHERE is_pinned = 1';
-          await connection.query(unpinQuery);
+          const unpinQuery = 'UPDATE recipes SET is_pinned = 0 WHERE is_pinned = 1 AND user_id = ?';
+          await connection.query(unpinQuery, [userId]);
       }
 
       // 插入新菜谱
       const insertQuery = `
-          INSERT INTO recipes (name, tags, rating, image_path, is_pinned, created_at, updated_at) 
-          VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+          INSERT INTO recipes (user_id, name, tags, rating, image_path, is_pinned, created_at, updated_at) 
+          VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
       `;
-      const [result] = await connection.query(insertQuery, [name, tags || null, rating, image_path || null, is_pinned || 0]);
+      const [result] = await connection.query(insertQuery, [userId, name, tags || null, rating, image_path || null, is_pinned || 0]);
+
+      // 查询新插入的记录
+      const selectQuery = `
+          SELECT 
+              r.id AS recipe_id,
+              r.name AS recipe_name,
+              r.tags,
+              r.rating,
+              r.image_path,
+              r.is_pinned,
+              r.created_at,
+              r.updated_at
+          FROM recipes r
+          WHERE r.id = ? AND r.user_id = ?
+      `;
+      const [rows] = await connection.query(selectQuery, [result.insertId, userId]);
 
       await connection.commit();
 
       return res.success({
-          id: result.insertId,
+          data: rows[0],
           message: '菜谱新增成功'
       });
   } catch (error) {
@@ -998,6 +1016,7 @@ router.post('/recipes/add', asyncHandler(async (req, res) => {
 // 更新菜谱
 router.post('/recipes/update', asyncHandler(async (req, res) => {
   const { id, name, tags, rating, image_path, is_pinned } = req.body;
+  const userId = req.auth.userId;
 
   // 参数校验
   if (!id) {
@@ -1024,9 +1043,9 @@ router.post('/recipes/update', asyncHandler(async (req, res) => {
               image_path = COALESCE(?, image_path), 
               is_pinned = COALESCE(?, is_pinned), 
               updated_at = NOW()
-          WHERE id = ?
+          WHERE id = ? AND user_id = ?
       `;
-      const [result] = await connection.query(updateQuery, [name, tags, rating, image_path, is_pinned, id]);
+      const [result] = await connection.query(updateQuery, [name, tags, rating, image_path, is_pinned, id, userId]);
 
       await connection.commit();
 
@@ -1046,8 +1065,9 @@ router.post('/recipes/update', asyncHandler(async (req, res) => {
 
 
 // 删除菜谱
-router.delete('/recipes/delete', asyncHandler(async (req, res) => {
-    const { id } = req.query;
+router.post('/recipes/delete', asyncHandler(async (req, res) => {
+    const { id } = req.body;
+    const userId = req.auth.userId;
 
     // 参数校验
     if (!id) {
@@ -1056,8 +1076,8 @@ router.delete('/recipes/delete', asyncHandler(async (req, res) => {
 
     try {
         // 删除主表菜谱数据
-        const deleteQuery = 'DELETE FROM recipes WHERE id = ?';
-        const [result] = await db.query(deleteQuery, [id]);
+        const deleteQuery = 'DELETE FROM recipes WHERE id = ? AND user_id = ?';
+        const [result] = await db.query(deleteQuery, [id, userId]);
 
         if (result.affectedRows > 0) {
             return res.success({ message: '菜谱删除成功' });
