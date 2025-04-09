@@ -5,8 +5,8 @@ const { asyncHandler } = require('../middleware/errorHandler');
 
 // 获取基金列表（含当日收益 & 盈亏率）
 router.post('/holdingShares/list', asyncHandler(async (req, res) => {
-  const userId = req.auth.userId;  // 获取用户 ID
-  const { transaction_date } = req.body;  // 从请求体中获取交易日期
+  const userId = req.auth.userId;
+  const { transaction_date } = req.body;
 
   // 参数验证
   if (!transaction_date) {
@@ -14,9 +14,27 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
   }
 
   try {
-    // 查询基金持有数据
+    // 查询基金持有数据，显式列出所有字段
     const [funds] = await db.query(
-      'SELECT * FROM `fund_holdings` WHERE `user_id` = ?',
+      `SELECT 
+        id,
+        user_id,
+        fund_name,
+        code,
+        index_code,
+        holding_amount,
+        holding_shares,
+        average_net_value,
+        holding_cost,
+        holding_profit,
+        holding_profit_rate,
+        total_cost,
+        total_amount,
+        total_profit,
+        total_profit_rate,
+        management_fee
+      FROM fund_holdings 
+      WHERE user_id = ?`,
       [userId]
     );
 
@@ -37,7 +55,7 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
     // 构建基金列表，直接附加 dailyData
     const enrichedFunds = funds.map(fund => ({
       ...fund,
-      dailyData: dailyProfitLoss.find(d => d.fund_id === fund.id) || {} // 若无数据，则为空对象
+      dailyData: dailyProfitLoss.find(d => d.fund_id === fund.id) || {}
     }));
 
     return res.success(enrichedFunds, '基金列表获取成功');
@@ -55,7 +73,7 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
 // 新增基金
 router.post('/holdingShares/add', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { fund_name, code } = req.body;
+  const { fund_name, code, index_code } = req.body;  // 添加 index_code
 
   if (!fund_name) {
     return res.error('缺少必要的字段', 400);
@@ -75,8 +93,8 @@ router.post('/holdingShares/add', asyncHandler(async (req, res) => {
 
   try {
     const [result] = await db.query(
-      'INSERT INTO `fund_holdings` (`user_id`, `fund_name`, `code`, `holding_amount`, `holding_shares`, `average_net_value`, `holding_profit`, `holding_profit_rate`, `total_profit`, `total_profit_rate`, `management_fee`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [userId, fund_name, code, ...Object.values(defaultValues)]
+      'INSERT INTO `fund_holdings` (`user_id`, `fund_name`, `code`, `index_code`, `holding_amount`, `holding_shares`, `average_net_value`, `holding_profit`, `holding_profit_rate`, `total_profit`, `total_profit_rate`, `management_fee`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [userId, fund_name, code, index_code, ...Object.values(defaultValues)]
     );
     return res.success({ id: result.insertId }, '基金新增成功');
   } catch (error) {
@@ -89,7 +107,7 @@ router.post('/holdingShares/add', asyncHandler(async (req, res) => {
 // 修改基金
 router.post('/holdingShares/update', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { id, fund_name, code } = req.body;
+  const { id, fund_name, code, index_code } = req.body;  // 添加 index_code
 
   if (!id || !fund_name) {
     return res.error('缺少必要的字段', 400);
@@ -97,8 +115,8 @@ router.post('/holdingShares/update', asyncHandler(async (req, res) => {
 
   try {
     const [result] = await db.query(
-      'UPDATE `fund_holdings` SET `fund_name` = ?, `code` = ? WHERE `id` = ? AND `user_id` = ?',
-      [fund_name, code, id, userId]
+      'UPDATE `fund_holdings` SET `fund_name` = ?, `code` = ?, `index_code` = ? WHERE `id` = ? AND `user_id` = ?',
+      [fund_name, code, index_code, id, userId]
     );
 
     if (result.affectedRows === 0) {
