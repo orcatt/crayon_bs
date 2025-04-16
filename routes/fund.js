@@ -26,6 +26,7 @@ router.post('/holdingShares/list', asyncHandler(async (req, res) => {
         holding_cost,
         holding_profit,
         holding_profit_rate,
+        sell_profit,
         total_profit,
         total_cost,
         management_fee
