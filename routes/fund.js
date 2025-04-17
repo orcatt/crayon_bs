@@ -726,6 +726,15 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
 }));
 
 
+// 获取当前持股的今日行情
+router.post('/holdingShares/todayMarket', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { fund_id } = req.body;
+  
+  
+}));
+
+
 // 更新盈亏
 router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -835,6 +844,8 @@ router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
     connection.release();
   }
 }));
+
+
 
 
 // 删除盈亏记录
@@ -967,6 +978,7 @@ router.post('/holdingShares/deleteProfitLoss', asyncHandler(async (req, res) => 
     connection.release();
   }
 }));
+
 
 // 获取某基金的月度每日收益列表
 router.post('/holdingShares/profitList', asyncHandler(async (req, res) => {

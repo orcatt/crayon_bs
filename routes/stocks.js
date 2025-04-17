@@ -5,6 +5,100 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { exec } = require('child_process');
 const path = require('path');
 
+// 获取多个股票的今日行情
+router.post('/todayMarket', asyncHandler(async (req, res) => {
+  const { stock_codes_list, market_date } = req.body;
+
+  // 参数验证
+  if (!stock_codes_list || !market_date || !Array.isArray(stock_codes_list)) {
+    return res.error('缺少必要的字段: stock_codes_list, market_date 或 stock_codes_list 不是数组', 400);
+  }
+
+  // 将 yyyy-mm-dd 格式转换为 yyyymmdd 格式
+  const date_formatted = market_date.replace(/-/g, '');
+  
+  try {
+    const pythonExecutable = path.join(__dirname, '../venv/bin/python');
+    const pythonScript = path.join(__dirname, '../scripts/abandoned/code_trade_30.py');
+    
+    // 用于存储所有股票数据的数组
+    const allStockData = {
+      list: []
+    };
+
+    // 使用 Promise.all 并行处理所有股票代码
+    const promises = stock_codes_list.map(stock_code => {
+      console.log(stock_code);
+      
+      return new Promise((resolve, reject) => {
+        exec(`${pythonExecutable} ${pythonScript} ${stock_code} ${date_formatted} ${date_formatted}`, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`执行 Python 脚本出错 (${stock_code}): ${error.message}`);
+            reject(error);
+            return;
+          }
+          if (stderr) {
+            console.error(`Python 脚本错误 (${stock_code}): ${stderr}`);
+            reject(new Error(stderr));
+            return;
+          }
+
+          try {
+            const output = stdout.trim();
+            
+            // 检查输出中是否包含证券代码错误的信息
+            if (output.includes('证券代码') && output.includes('可能有误')) {
+              reject(new Error(`无效的证券代码: ${stock_code}`));
+              return;
+            }
+            
+            const stockData = JSON.parse(output);
+
+            if (stockData.error) {
+              reject(new Error(stockData.error));
+              return;
+            }
+
+            if (!stockData || !stockData.list) {
+              reject(new Error(`无效的股票数据: ${stock_code}`));
+              return;
+            }
+
+            resolve(stockData);
+          } catch (parseError) {
+            console.error(`JSON 解析错误 (${stock_code}):`, parseError);
+            reject(parseError);
+          }
+        });
+      });
+    });
+
+    // 等待所有请求完成
+    const results = await Promise.all(promises.map(p => p.catch(e => ({ error: e.message }))));
+    
+    // 合并所有结果
+    results.forEach((result, index) => {
+      if (result.error) {
+        // 如果有错误，添加一个带有错误信息的对象
+        allStockData.list.push({
+          stock_code: stock_codes_list[index],
+          error: result.error
+        });
+      } else if (result.list && result.list.length > 0) {
+        // 如果成功，添加股票数据
+        allStockData.list.push(...result.list);
+      }
+    });
+
+    return res.success(allStockData, '股票数据获取成功');
+
+  } catch (error) {
+    console.error(error);
+    return res.error('股票数据获取失败，请稍后重试', 500);
+  }
+}));
+
+
 
 // 获取股票K线数据-多日
 router.post('/tradeList', asyncHandler(async (req, res) => {
