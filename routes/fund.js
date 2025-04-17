@@ -185,7 +185,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
   let updatedTotalProfit = parseFloat(fund.total_profit) || 0;
   let updatedHoldingProfitRate = parseFloat(fund.holding_profit_rate) || 0;
   let updatedSellProfit = parseFloat(fund.sell_profit) || 0;
-  let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
+  // let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
 
   // 开始事务
   const connection = await db.getConnection();
@@ -286,8 +286,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
           holding_profit = ?,
           total_profit = ?,
           holding_profit_rate = ?,
-          sell_profit = ?,
-          current_net_value = ?
+          sell_profit = ?
       WHERE id = ?
     `;
     await connection.query(updateQuery, [
@@ -299,7 +298,6 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       updatedTotalProfit,
       updatedHoldingProfitRate,
       updatedSellProfit,
-      updatedCurrentNetValue,
       fund_id,
     ]);
 
@@ -314,6 +312,186 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
     connection.release();
   }
 }));
+
+// 批量买入卖出
+router.post('/holdingTransactions/batch', asyncHandler(async (req, res) => {
+  const transactions = req.body; // 交易数组
+  const userId = req.auth.userId;
+  
+  // 参数验证
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return res.error('请提供有效的交易数据数组', 400);
+  }
+
+  // 开启事务
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 存储所有处理结果
+    const results = [];
+
+    // 遍历处理每个交易
+    for (const transaction of transactions) {
+      const { fund_id, transaction_type, shares, net_value, transaction_date, amount } = transaction;
+
+      // 单条交易参数验证
+      if (!fund_id || !transaction_type || !shares || !net_value || !transaction_date) {
+        await connection.rollback();
+        return res.error('缺少必要的参数', 400);
+      }
+      // 校验 amount = net_value * shares
+      const expectedAmount = (parseFloat(shares) * parseFloat(net_value)).toFixed(2);
+      if (Math.abs(parseFloat(amount) - expectedAmount) > 0.01) {
+        return res.error('金额与净值和份额不匹配', 400);
+      }
+
+      // 验证基金所属权
+      const [fundRecord] = await connection.query(
+        'SELECT * FROM fund_holdings WHERE id = ? AND user_id = ?',
+        [fund_id, userId]
+      );
+      if (fundRecord.length === 0) {
+        await connection.rollback();
+        return res.error(`基金ID ${fund_id} 不存在或无权操作`, 403);
+      }
+      const fund = fundRecord[0];
+      
+      // 当前持有的字段
+      let updatedShares = parseFloat(fund.holding_shares) || 0;
+      let updatedAmount = parseFloat(fund.holding_amount) || 0;
+      let updatedTotalCost = parseFloat(fund.total_cost) || 0;
+      let updatedHoldingCost = parseFloat(fund.holding_cost) || 0;
+      let updatedHoldingProfit = parseFloat(fund.holding_profit) || 0;
+      let updatedTotalProfit = parseFloat(fund.total_profit) || 0;
+      let updatedHoldingProfitRate = parseFloat(fund.holding_profit_rate) || 0;
+      let updatedSellProfit = parseFloat(fund.sell_profit) || 0;
+      // let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
+
+      // 根据交易类型更新基金持仓
+      if (transaction_type === 'buy') {
+        // 1. 持有份额 = 原份额 + 新份额
+        updatedShares += parseFloat(shares);
+
+        // 2. 持有金额 = 原持有金额 + 新买入金额（暂时性）
+        updatedAmount += parseFloat(amount);
+
+        // 3. 总成本 = 原总成本 + 新买入金额
+        updatedTotalCost += parseFloat(amount);
+
+        // 4. 持有成本 = (原持有成本 * 原份额 + 新买入净值 * 新份额) / (原份额 + 新份额)
+        updatedHoldingCost =
+          ((updatedHoldingCost * (updatedShares - parseFloat(shares))) +
+            (parseFloat(net_value) * parseFloat(shares))) /
+          updatedShares;
+        
+        // 5. 卖出收益（保持不变）
+        // updatedSellProfit = updatedSellProfit（无需更新）
+
+        // 6. 总收益（保持不变）
+        // updatedTotalProfit = updatedTotalProfit（无需更新）
+
+        // 7. 持有收益（保持不变）
+        // updatedHoldingProfit = updatedHoldingProfit（无需更新）
+
+        // 8. 持有收益率 = 持有收益 / 总成本（补仓后更新）
+        updatedHoldingProfitRate = updatedTotalCost > 0 ? (updatedHoldingProfit / updatedTotalCost).toFixed(4) : 0;
+
+        // 9. 现价（保持不变）
+        // updatedCurrentNetValue = updatedCurrentNetValue（无需更新）
+
+      
+
+      } else if (transaction_type === 'sell') {
+        // 验证是否有足够的份额卖出
+        if (parseFloat(fund.holding_shares) < parseFloat(shares)) {
+          await connection.rollback();
+          return res.error(`基金ID ${fund_id} 的持有份额不足`, 400);
+        }
+
+        
+        // 1. 持有份额 = 原份额 - 卖出份额
+        updatedShares -= parseFloat(shares);
+
+        // 2. 持有金额 = 原持有金额 - 卖出金额
+        updatedAmount -= parseFloat(amount);
+
+        // 3. 总成本 = 原总成本 - (持有成本 * 卖出份额)
+        updatedTotalCost -= (updatedHoldingCost * parseFloat(shares)).toFixed(2);
+
+        // 4. 持有成本（保持不变）
+        // updatedHoldingCost = updatedHoldingCost（无需更新）
+
+        // 5. 卖出收益 = (卖出净值 - 持有成本) * 卖出份额
+        const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
+        updatedSellProfit += parseFloat(sellProfit);
+        
+        // 6. 总收益 = 原总收益 + 卖出收益
+        updatedTotalProfit += parseFloat(sellProfit);
+
+        // 7. 持有收益（保持不变）
+        // updatedHoldingProfit = updatedHoldingProfit
+
+        // 8. 持有收益率（保持不变）
+        // updatedHoldingProfitRate = updatedHoldingProfitRate
+
+        // 9. 现价（保持不变）
+        // updatedCurrentNetValue = updatedCurrentNetValue（无需更新）
+
+        // 处理清仓情况
+        if (updatedShares <= 0) {
+          updatedAmount = 0;
+          updatedTotalCost = 0;
+          updatedHoldingCost = 0;
+          updatedHoldingProfit = 0;
+          updatedHoldingProfitRate = 0;
+        }
+        
+      }
+      // 更新基金持仓
+      await connection.query(
+        `UPDATE fund_holdings 
+        SET holding_shares = ?,
+            holding_amount = ?,
+            holding_cost = ?,
+            total_cost = ?,
+            holding_profit = ?,
+            total_profit = ?,
+            holding_profit_rate = ?,
+            sell_profit = ?
+        WHERE id = ?`,
+        [updatedShares, updatedAmount, updatedHoldingCost, updatedTotalCost, updatedHoldingProfit, updatedTotalProfit, updatedHoldingProfitRate, updatedSellProfit, fund_id]
+      );
+      // 插入买入/卖出记录
+      const [result] = await connection.query(
+        `INSERT INTO fund_transactions 
+        (fund_id, user_id, transaction_type, shares, net_value, amount, transaction_date) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [fund_id, userId, transaction_type, shares, net_value, amount, transaction_date]
+      );
+
+      results.push({
+        fund_id,
+        transaction_id: result.insertId,
+        status: 'success'
+      });
+    }
+
+    await connection.commit();
+    return res.success({
+      results,
+      message: '批量交易处理成功'
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('批量交易处理失败:', error);
+    return res.error(error.message || '批量交易处理失败', 500);
+  } finally {
+    connection.release();
+  }
+}));
+
 
 
 // 查询某个基金的买入卖出数据列表
@@ -412,7 +590,7 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
   let updatedTotalProfit = parseFloat(fund.total_profit) || 0;
   let updatedHoldingProfitRate = parseFloat(fund.holding_profit_rate) || 0;
   let updatedSellProfit = parseFloat(fund.sell_profit) || 0;
-  let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
+  // let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
 
   // 开始事务
   const connection = await db.getConnection();
@@ -520,8 +698,7 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
           holding_profit = ?,
           total_profit = ?,
           holding_profit_rate = ?,
-          sell_profit = ?,
-          current_net_value = ?
+          sell_profit = ?
       WHERE id = ?
     `;
     await connection.query(updateQuery, [
@@ -533,7 +710,6 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
       updatedTotalProfit,
       updatedHoldingProfitRate,
       updatedSellProfit,
-      updatedCurrentNetValue,
       fund_id,
     ]);
 
