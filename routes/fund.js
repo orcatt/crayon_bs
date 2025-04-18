@@ -726,15 +726,6 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
 }));
 
 
-// 获取当前持股的今日行情
-router.post('/holdingShares/todayMarket', asyncHandler(async (req, res) => {
-  const userId = req.auth.userId;
-  const { fund_id } = req.body;
-  
-  
-}));
-
-
 // 更新盈亏
 router.post('/holdingShares/profitLoss', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -1077,6 +1068,142 @@ router.post('/holdingShares/userProfitList', asyncHandler(async (req, res) => {
   }
 }));
 
+
+
+// 批量更新盈亏
+router.post('/holdingShares/batchProfitLoss', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const profitLossList = req.body; // 盈亏数据数组
+  
+  // 参数验证
+  if (!Array.isArray(profitLossList) || profitLossList.length === 0) {
+    return res.error('请提供有效的盈亏数据数组', 400);
+  }
+
+  // 开启事务
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 存储所有处理结果
+    const results = [];
+
+    // 遍历处理每个盈亏更新
+    for (const item of profitLossList) {
+      const { fund_id, current_net_value, transaction_date } = item;
+
+      // 单条数据参数验证
+      if (!fund_id || current_net_value === undefined || !transaction_date) {
+        await connection.rollback();
+        return res.error('缺少必要的字段', 400);
+      }
+
+      // 查询基金持有数据
+      const [fundRecord] = await connection.query(
+        'SELECT * FROM `fund_holdings` WHERE `id` = ? AND `user_id` = ?',
+        [fund_id, userId]
+      );
+      if (fundRecord.length === 0) {
+        await connection.rollback();
+        return res.error(`基金ID ${fund_id} 不存在或无权操作`, 403);
+      }
+      const fund = fundRecord[0];
+
+      // 校验持仓份额
+      if (parseFloat(fund.holding_shares) === 0) {
+        await connection.rollback();
+        return res.error(`基金ID ${fund_id} 无持仓份额，无法计算盈亏`, 400);
+      }
+
+      // 计算新的持有数据
+      const newHoldingAmount = (parseFloat(current_net_value) * parseFloat(fund.holding_shares)).toFixed(2);
+      const newHoldingProfit = (parseFloat(newHoldingAmount) - parseFloat(fund.total_cost)).toFixed(2);
+      const newTotalProfit = (parseFloat(newHoldingProfit) + parseFloat(fund.sell_profit)).toFixed(2);
+      const newHoldingProfitRate =
+        parseFloat(fund.total_cost) > 0
+          ? Math.min(Math.max(newHoldingProfit / parseFloat(fund.total_cost), -9999), 9999).toFixed(4)
+          : 0;
+
+      // 计算盈亏金额（与前一天的 holding_profit 相比）
+      const profitLoss = (parseFloat(newHoldingProfit) - parseFloat(fund.holding_profit)).toFixed(2);
+
+      // 1. 更新 fund_holdings
+      await connection.query(
+        `UPDATE fund_holdings
+        SET holding_amount = ?,
+            holding_profit = ?,
+            total_profit = ?,
+            holding_profit_rate = ?,
+            current_net_value = ?
+        WHERE id = ?`,
+        [
+          newHoldingAmount,
+          newHoldingProfit,
+          newTotalProfit,
+          newHoldingProfitRate,
+          parseFloat(current_net_value).toFixed(4),
+          fund_id,
+        ]
+      );
+
+      // 2. 插入/更新 fund_daily_profit_loss
+      await connection.query(
+        `INSERT INTO fund_daily_profit_loss (fund_id, user_id, transaction_date, current_net_value, profit_loss)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE current_net_value = VALUES(current_net_value), profit_loss = VALUES(profit_loss)`,
+        [
+          fund_id,
+          userId,
+          transaction_date,
+          parseFloat(current_net_value).toFixed(4),
+          profitLoss,
+        ]
+      );
+
+      // 3. 更新 fund_daily_profit_loss_summary
+      const [existingSummary] = await connection.query(
+        'SELECT total_profit_loss FROM fund_daily_profit_loss_summary WHERE user_id = ? AND transaction_date = ?',
+        [userId, transaction_date]
+      );
+
+      if (existingSummary.length > 0) {
+        // 更新现有记录
+        await connection.query(
+          `UPDATE fund_daily_profit_loss_summary
+          SET total_profit_loss = total_profit_loss + ?
+          WHERE user_id = ? AND transaction_date = ?`,
+          [profitLoss, userId, transaction_date]
+        );
+      } else {
+        // 插入新记录
+        await connection.query(
+          `INSERT INTO fund_daily_profit_loss_summary (user_id, transaction_date, total_profit_loss)
+          VALUES (?, ?, ?)`,
+          [userId, transaction_date, profitLoss]
+        );
+      }
+
+      results.push({
+        fund_id,
+        status: 'success',
+        profit_loss: profitLoss
+      });
+    }
+
+    await connection.commit();
+    return res.success({
+      results,
+      message: '批量盈亏更新成功'
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('批量更新盈亏操作失败:', error);
+    return res.error(error.message || '批量更新盈亏失败，请稍后重试', 500);
+  } finally {
+    connection.release();
+  }
+}));
 
 
 module.exports = router;

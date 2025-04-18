@@ -28,7 +28,6 @@ router.post('/todayMarket', asyncHandler(async (req, res) => {
 
     // 使用 Promise.all 并行处理所有股票代码
     const promises = stock_codes_list.map(stock_code => {
-      console.log(stock_code);
       
       return new Promise((resolve, reject) => {
         exec(`${pythonExecutable} ${pythonScript} ${stock_code} ${date_formatted} ${date_formatted}`, (error, stdout, stderr) => {
