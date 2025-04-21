@@ -159,8 +159,302 @@ async function isNumberExists(number) {
 
 // ? --------------------- 任务表相关 ---------------------
 // 获取任务列表
+router.post('/tasks/list', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+
+  try {
+    // 使用 UNION 合并两个查询，并通过 sort_order 控制排序
+    const sql = `
+      (SELECT *, 1 as sort_order 
+        FROM slave_tasks 
+        WHERE user_id = ?)
+      UNION ALL
+      (SELECT *, 2 as sort_order 
+        FROM slave_tasks 
+        WHERE public_display = 1 AND user_id != ?)
+      ORDER BY sort_order, id DESC
+    `;
+    // 自己的任务在前（sort_order = 1），公共任务在后（sort_order = 2）
+    const [tasks] = await db.query(sql, [userId, userId]);
+    
+    return res.success({
+      list: tasks,
+      total: tasks.length
+    }, '获取任务列表成功');
+  } catch (error) {
+    console.error('获取任务列表失败:', error);
+    return res.error('获取任务列表失败', 500);
+  }
+}));
+
 // 新增任务
+router.post('/tasks/add', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const {
+    name,
+    description,
+    type,
+    reward_punishment,
+    difficulty_level,
+    public_display
+  } = req.body;
+
+  // 参数验证
+  if (!name || !type || !reward_punishment || !difficulty_level) {
+    return res.error('缺少必要字段', 400);
+  }
+
+  try {
+    const sql = `
+      INSERT INTO slave_tasks 
+      (user_id, name, description, type, reward_punishment, difficulty_level, public_display)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    const [result] = await db.query(sql, [
+      userId,
+      name,
+      description,
+      type,
+      reward_punishment,
+      difficulty_level,
+      public_display
+    ]);
+
+    return res.success({
+      id: result.insertId
+    }, '新增任务成功');
+  } catch (error) {
+    console.error('新增任务失败:', error);
+    return res.error('新增任务失败', 500);
+  }
+}));
+
 // 修改任务
+router.post('/tasks/update', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const {
+    id,
+    name,
+    description,
+    type,
+    reward_punishment,
+    difficulty_level,
+    public_display
+  } = req.body;
+
+  // 参数验证
+  if (!id || !name || !type || !reward_punishment || !difficulty_level) {
+    return res.error('缺少必要字段', 400);
+  }
+
+  try {
+    // 先查询任务信息验证权限
+    const [taskInfo] = await db.query('SELECT user_id FROM slave_tasks WHERE id = ?', [id]);
+    
+    if (taskInfo.length === 0) {
+      return res.error('任务不存在', 404);
+    }
+
+    // 如果是公共任务(user_id为null)或不是自己创建的任务
+    if (!taskInfo[0].user_id || taskInfo[0].user_id !== userId) {
+      return res.error('无权修改此任务', 403);
+    }
+
+    const sql = `
+      UPDATE slave_tasks 
+      SET name = ?,
+          description = ?,
+          type = ?,
+          reward_punishment = ?,
+          difficulty_level = ?,
+          public_display = ?
+      WHERE id = ? AND user_id = ?
+    `;
+
+    const [result] = await db.query(sql, [
+      name,
+      description,
+      type,
+      reward_punishment,
+      difficulty_level,
+      public_display,
+      id,
+      userId
+    ]);
+
+    return res.success({ message: '修改任务成功' });
+  } catch (error) {
+    console.error('修改任务失败:', error);
+    return res.error('修改任务失败', 500);
+  }
+}));
+
 // 删除任务
+router.post('/tasks/delete', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { id } = req.body;
+
+  if (!id) {
+    return res.error('缺少必要字段', 400);
+  }
+
+  try {
+    // 先查询任务信息验证权限
+    const [taskInfo] = await db.query('SELECT user_id FROM slave_tasks WHERE id = ?', [id]);
+    
+    if (taskInfo.length === 0) {
+      return res.error('任务不存在', 404);
+    }
+
+    // 如果是公共任务(user_id为null)或不是自己创建的任务
+    if (!taskInfo[0].user_id || taskInfo[0].user_id !== userId) {
+      return res.error('无权删除此任务', 403);
+    }
+
+    const sql = 'DELETE FROM slave_tasks WHERE id = ? AND user_id = ?';
+    const [result] = await db.query(sql, [id, userId]);
+    return res.success({ message: '删除任务成功' });
+  } catch (error) {
+    console.error('删除任务失败:', error);
+    return res.error('删除任务失败', 500);
+  }
+}));
+
+
+// 获取每日规矩
+router.post('/dailyRules/day', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { date } = req.body;
+
+  // 参数验证
+  if (!date) {
+    return res.error('日期不能为空', 400);
+  }
+
+  try {
+    // 查询指定日期的规矩记录
+    const [rows] = await db.query(`
+      SELECT 
+        id,
+        user_id,
+        kowtow,
+        is_locked,
+        touch_count,
+        libido_status,
+        excretion_count_allowed,
+        excretion_count,
+        water_intake,
+        water_completed,
+        other_tools,
+        daily_task_id,
+        daily_task_completed,
+        extra_task_id,
+        extra_task_completed,
+        violation,
+        score,
+        DATE_FORMAT(date, '%Y-%m-%d') as date,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at
+      FROM slave_daily_rules
+      WHERE user_id = ? AND date = ?
+    `, [userId, date]);
+
+    // 如果没有找到记录
+    if (rows.length === 0) {
+      return res.error('未找到指定日期的规矩记录', 404);
+    }
+
+    return res.success(rows[0], '获取成功');
+  } catch (error) {
+    console.error('获取每日规矩失败:', error);
+    return res.error('获取每日规矩失败', 500);
+  }
+}));
+
+// 新增修改每日规矩
+router.post('/dailyRules/save', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const {
+    date,  // 必填
+    kowtow = 0,
+    is_locked = 0,
+    touch_count = 0,
+    libido_status = '平常',
+    excretion_count_allowed = 0,
+    excretion_count = 0,
+    water_intake = '0',
+    water_completed = 0,
+    other_tools = null,
+    daily_task_id = null,
+    daily_task_completed = 0,
+    extra_task_id = null,
+    extra_task_completed = 0,
+    violation = null,
+    score = null
+  } = req.body;
+
+  // 参数验证
+  if (!date) {
+    return res.error('日期不能为空', 400);
+  }
+
+  try {
+    // 查询是否存在当天的记录
+    const [existing] = await db.query(
+      'SELECT id FROM slave_daily_rules WHERE user_id = ? AND date = ?',
+      [userId, date]
+    );
+
+    // 构建数据对象
+    const dailyRuleData = {
+      user_id: userId,
+      date,
+      kowtow,
+      is_locked,
+      touch_count,
+      libido_status,
+      excretion_count_allowed,
+      excretion_count,
+      water_intake,
+      water_completed,
+      other_tools,
+      daily_task_id,
+      daily_task_completed,
+      extra_task_id,
+      extra_task_completed,
+      violation,
+      score
+    };
+
+    let result;
+    if (existing.length > 0) {
+      // 更新现有记录
+      [result] = await db.query(
+        'UPDATE slave_daily_rules SET ? WHERE id = ?',
+        [dailyRuleData, existing[0].id]
+      );
+      
+      return res.success({
+        id: existing[0].id
+      }, '更新每日规矩成功');
+    } else {
+      // 插入新记录
+      [result] = await db.query(
+        'INSERT INTO slave_daily_rules SET ?',
+        [dailyRuleData]
+      );
+
+      return res.success({
+        id: result.insertId
+      }, '新增每日规矩成功');
+    }
+  } catch (error) {
+    console.error('保存每日规矩失败:', error);
+    return res.error('保存每日规矩失败', 500);
+  }
+}));
+
+
+
 
 module.exports = router;
