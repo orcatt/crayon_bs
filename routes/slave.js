@@ -161,21 +161,28 @@ async function isNumberExists(number) {
 // 获取任务列表
 router.post('/tasks/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
+  const { type } = req.body;  // 获取可选的 type 参数
 
   try {
-    // 使用 UNION 合并两个查询，并通过 sort_order 控制排序
+    // 构建基础 SQL，根据是否有 type 参数添加条件
+    const typeCondition = type ? 'AND type = ?' : '';
     const sql = `
       (SELECT *, 1 as sort_order 
         FROM slave_tasks 
-        WHERE user_id = ?)
+        WHERE user_id = ? ${typeCondition})
       UNION ALL
       (SELECT *, 2 as sort_order 
         FROM slave_tasks 
-        WHERE public_display = 1 AND user_id != ?)
+        WHERE public_display = 1 AND user_id != ? ${typeCondition})
       ORDER BY sort_order, id DESC
     `;
-    // 自己的任务在前（sort_order = 1），公共任务在后（sort_order = 2）
-    const [tasks] = await db.query(sql, [userId, userId]);
+    
+    // 构建查询参数数组
+    const params = type 
+      ? [userId, type, userId, type]  // 有 type 参数时
+      : [userId, userId];             // 没有 type 参数时
+    
+    const [tasks] = await db.query(sql, params);
     
     return res.success({
       list: tasks,
