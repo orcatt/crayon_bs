@@ -7,7 +7,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 router.post('/info/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;  // 从中间件获取 userId
 
-  // 查询 user_slave_info 表，获取指定 userId 的数据
+  // 查询 slave_info 表，获取指定 userId 的数据
   const [rows] = await db.query(`
     SELECT 
       id, 
@@ -32,7 +32,7 @@ router.post('/info/list', asyncHandler(async (req, res) => {
       avg_masturbation_frequency, 
       avg_masturbation_duration, 
       semen_volume
-    FROM user_slave_info
+    FROM slave_info
     WHERE user_id = ?
   `, [userId]);
 
@@ -97,15 +97,15 @@ router.post('/info/addOrUpdate', asyncHandler(async (req, res) => {
   };
 
   // 检查 user_id 是否已有 slave 信息
-  const [existing] = await db.query('SELECT id FROM user_slave_info WHERE user_id = ?', [userId]);
+  const [existing] = await db.query('SELECT id FROM slave_info WHERE user_id = ?', [userId]);
 
   let result;
   if (existing.length > 0) {
     // 如果已有数据，执行更新操作
-    [result] = await db.query('UPDATE user_slave_info SET ? WHERE user_id = ?', [userSlaveInfoData, userId]);
+    [result] = await db.query('UPDATE slave_info SET ? WHERE user_id = ?', [userSlaveInfoData, userId]);
   } else {
     // 如果没有数据，执行插入操作
-    [result] = await db.query('INSERT INTO user_slave_info SET ?', [userSlaveInfoData]);
+    [result] = await db.query('INSERT INTO slave_info SET ?', [userSlaveInfoData]);
   }
 
   // 获取更新或插入的数据
@@ -133,7 +133,7 @@ router.post('/info/addOrUpdate', asyncHandler(async (req, res) => {
       avg_masturbation_frequency, 
       avg_masturbation_duration, 
       semen_volume
-    FROM user_slave_info
+    FROM slave_info
     WHERE id = ?
   `, [existing.length > 0 ? existing[0].id : result.insertId]);
 
@@ -152,7 +152,7 @@ function generateUniqueNumber() {
 
 // 检查 number 是否已经存在
 async function isNumberExists(number) {
-  const [rows] = await db.query('SELECT 1 FROM user_slave_info WHERE number = ?', [number]);
+  const [rows] = await db.query('SELECT 1 FROM slave_info WHERE number = ?', [number]);
   return rows.length > 0;  // 如果存在，返回 true
 }
 
