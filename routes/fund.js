@@ -252,6 +252,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 
       // 4. 持有成本（保持不变）
       // updatedHoldingCost = updatedHoldingCost（无需更新）
+      updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
       // 5. 卖出收益 = (卖出净值 - 持有成本) * 卖出份额
       const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
@@ -427,6 +428,7 @@ router.post('/holdingTransactions/batch', asyncHandler(async (req, res) => {
 
         // 4. 持有成本（保持不变）
         // updatedHoldingCost = updatedHoldingCost（无需更新）
+        updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
         // 5. 卖出收益 = (卖出净值 - 持有成本) * 卖出份额
         const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
