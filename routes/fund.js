@@ -246,7 +246,9 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
       updatedAmount -= parseFloat(amount);
 
       // 3. 总成本 = 原总成本 - (持有成本 * 卖出份额)
-      updatedTotalCost -= (updatedHoldingCost * parseFloat(shares)).toFixed(2);
+      // updatedTotalCost -= (updatedHoldingCost * parseFloat(shares)).toFixed(2);
+      // 3. 总成本 = 原总成本 - 卖出金额
+      updatedTotalCost -= parseFloat(amount);
 
       // 4. 持有成本（保持不变）
       // updatedHoldingCost = updatedHoldingCost（无需更新）
@@ -419,7 +421,9 @@ router.post('/holdingTransactions/batch', asyncHandler(async (req, res) => {
         updatedAmount -= parseFloat(amount);
 
         // 3. 总成本 = 原总成本 - (持有成本 * 卖出份额)
-        updatedTotalCost -= (updatedHoldingCost * parseFloat(shares)).toFixed(2);
+        // updatedTotalCost -= (updatedHoldingCost * parseFloat(shares)).toFixed(2);
+        // 3. 总成本 = 原总成本 - 卖出金额
+        updatedTotalCost -= parseFloat(amount);
 
         // 4. 持有成本（保持不变）
         // updatedHoldingCost = updatedHoldingCost（无需更新）
