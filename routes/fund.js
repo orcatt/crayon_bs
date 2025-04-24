@@ -252,7 +252,7 @@ router.post('/holdingTransactions/buysell', asyncHandler(async (req, res) => {
 
       // 4. 持有成本（保持不变）
       // updatedHoldingCost = updatedHoldingCost（无需更新）
-      updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
+      // updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
       // 5. 卖出收益 = (卖出净值 - 持有成本) * 卖出份额
       const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
@@ -428,7 +428,7 @@ router.post('/holdingTransactions/batch', asyncHandler(async (req, res) => {
 
         // 4. 持有成本（保持不变）
         // updatedHoldingCost = updatedHoldingCost（无需更新）
-        updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
+        // updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
         // 5. 卖出收益 = (卖出净值 - 持有成本) * 卖出份额
         const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
@@ -598,7 +598,6 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
   let updatedTotalProfit = parseFloat(fund.total_profit) || 0;
   let updatedHoldingProfitRate = parseFloat(fund.holding_profit_rate) || 0;
   let updatedSellProfit = parseFloat(fund.sell_profit) || 0;
-  // let updatedCurrentNetValue = parseFloat(fund.current_net_value) || 0;
 
   // 开始事务
   const connection = await db.getConnection();
@@ -620,40 +619,26 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
       // 1. 持有份额 = 原份额 - 买入份额
       updatedShares -= parseFloat(shares);
 
-      // 2. 持有金额 = 原持有金额 - 买入金额（暂时性）
+      // 2. 持有金额 = 原持有金额 - 买入金额
       updatedAmount -= parseFloat(amount);
 
       // 3. 总成本 = 原总成本 - 买入金额
       updatedTotalCost -= parseFloat(amount);
 
-      // 4. 持有成本 = 回退到买入前的成本
-      if (updatedShares > 0) {
-        // 买入时的持有成本计算：
-        // 原成本 = (原持有成本 * 原份额 + 净值 * 买入份额) / (原份额 + 买入份额)
-        // 回退：(当前持有成本 * 当前份额 - 买入净值 * 买入份额) / (当前份额 - 买入份额)
-        updatedHoldingCost =
-          ((updatedHoldingCost * (updatedShares + parseFloat(shares)) -
-            parseFloat(net_value) * parseFloat(shares)) /
-            updatedShares).toFixed(4);
-      } else {
-        updatedHoldingCost = 0; // 清仓
-      }
-
+      // 4. 持有成本 = 总成本 / 剩余份额
+      updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
       // 5. 卖出收益（保持不变）
       // updatedSellProfit = updatedSellProfit
 
-      // 6. 总收益（保持不变，与买入一致）
+      // 6. 总收益（保持不变）
       // updatedTotalProfit = updatedTotalProfit
 
-      // 7. 持有收益（保持不变，与买入一致）
+      // 7. 持有收益（保持不变）
       // updatedHoldingProfit = updatedHoldingProfit
 
-      // 8. 持有收益率 = 持有收益 / 总成本（回退到买入前的收益率）
+      // 8. 持有收益率 = 持有收益 / 总成本
       updatedHoldingProfitRate = updatedTotalCost > 0 ? (updatedHoldingProfit / updatedTotalCost).toFixed(4) : 0;
-
-      // 9. 现价（保持不变）
-      // updatedCurrentNetValue = updatedCurrentNetValue
 
     } else if (transaction_type === 'sell') {
       // 回退卖出：反向执行卖出逻辑
@@ -663,27 +648,19 @@ router.post('/holdingTransactions/delete', asyncHandler(async (req, res) => {
       // 2. 持有金额 = 原持有金额 + 卖出金额
       updatedAmount += parseFloat(amount);
 
-      // 3. 总成本 = 原总成本 + (持有成本 * 卖出份额)
-      updatedTotalCost = (parseFloat(updatedTotalCost) + updatedHoldingCost * parseFloat(shares)).toFixed(2);
+      // 3. 总成本 = 原总成本 + 卖出金额
+      updatedTotalCost += parseFloat(amount);
 
-      // 4. 持有成本（保持不变，与卖出一致）
-      // updatedHoldingCost = updatedHoldingCost
+      // 4. 持有成本 = 总成本 / 剩余份额
+      // updatedHoldingCost = updatedHoldingCost 
+      // updatedHoldingCost = updatedShares > 0 ? (updatedTotalCost / updatedShares).toFixed(4) : 0;
 
       // 5. 卖出收益 = 回退卖出收益
-      const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(2);
+      const sellProfit = ((parseFloat(net_value) - updatedHoldingCost) * parseFloat(shares)).toFixed(4);
       updatedSellProfit -= parseFloat(sellProfit);
 
       // 6. 总收益 = 原总收益 - 卖出收益
       updatedTotalProfit -= parseFloat(sellProfit);
-
-      // 7. 持有收益（保持不变，与卖出一致）
-      // updatedHoldingProfit = updatedHoldingProfit
-
-      // 8. 持有收益率（保持不变，与卖出一致）
-      // updatedHoldingProfitRate = updatedHoldingProfitRate
-
-      // 9. 现价（保持不变）
-      // updatedCurrentNetValue = updatedCurrentNetValue
     }
 
     // 3. 清仓检查
