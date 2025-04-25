@@ -157,6 +157,10 @@ async function isNumberExists(number) {
 }
 
 
+// ? --------------------- 每日规则表 ---------------------
+
+
+
 // ? --------------------- 任务表相关 ---------------------
 // 获取任务列表
 router.post('/tasks/list', asyncHandler(async (req, res) => {
@@ -458,6 +462,40 @@ router.post('/dailyRules/save', asyncHandler(async (req, res) => {
   } catch (error) {
     console.error('保存每日规矩失败:', error);
     return res.error('保存每日规矩失败', 500);
+  }
+}));
+
+// 删除每日规矩
+router.post('/dailyRules/delete', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { id } = req.body;
+
+  // 参数验证
+  if (!id) {
+    return res.error('id不能为空', 400);
+  }
+
+  try {
+    // 查询记录是否存在
+    const [existing] = await db.query(
+      'SELECT id FROM slave_daily_rules WHERE user_id = ? AND id = ?',
+      [userId, id]
+    );
+
+    if (existing.length === 0) {
+      return res.error('未找到指定日期的规矩记录', 404);
+    }
+
+    // 删除记录
+    await db.query(
+      'DELETE FROM slave_daily_rules WHERE user_id = ? AND id = ?',
+      [userId, id]
+    );
+
+    return res.success(null, '删除成功');
+  } catch (error) {
+    console.error('删除每日规矩失败:', error);
+    return res.error('删除每日规矩失败', 500);
   }
 }));
 
