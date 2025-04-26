@@ -45,8 +45,6 @@ router.post('/info/list', asyncHandler(async (req, res) => {
   return res.success(rows[0], '获取成功');
 }));
 
-
-
 // 新增用户 slave 信息接口
 router.post('/info/addOrUpdate', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;  // 从中间件获取 userId
@@ -333,6 +331,7 @@ router.post('/tasks/delete', asyncHandler(async (req, res) => {
 }));
 
 
+// ? --------------------- 每日规矩表相关 ---------------------
 // 获取每日规矩
 router.post('/dailyRules/day', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -499,6 +498,7 @@ router.post('/dailyRules/delete', asyncHandler(async (req, res) => {
   }
 }));
 
+// ? --------------------- 锁期表相关 ---------------------
 
 
 
