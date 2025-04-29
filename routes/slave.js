@@ -177,14 +177,14 @@ router.post('/tasks/list', asyncHandler(async (req, res) => {
         WHERE public_display = 1 AND user_id != ? ${typeCondition})
       ORDER BY sort_order, id DESC
     `;
-    
+
     // 构建查询参数数组
-    const params = type 
+    const params = type
       ? [userId, type, userId, type]  // 有 type 参数时
       : [userId, userId];             // 没有 type 参数时
-    
+
     const [tasks] = await db.query(sql, params);
-    
+
     return res.success({
       list: tasks,
       total: tasks.length
@@ -218,7 +218,7 @@ router.post('/tasks/add', asyncHandler(async (req, res) => {
       (user_id, name, description, type, reward_punishment, difficulty_level, public_display)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
-    
+
     const [result] = await db.query(sql, [
       userId,
       name,
@@ -259,7 +259,7 @@ router.post('/tasks/update', asyncHandler(async (req, res) => {
   try {
     // 先查询任务信息验证权限
     const [taskInfo] = await db.query('SELECT user_id FROM slave_tasks WHERE id = ?', [id]);
-    
+
     if (taskInfo.length === 0) {
       return res.error('任务不存在', 404);
     }
@@ -310,7 +310,7 @@ router.post('/tasks/delete', asyncHandler(async (req, res) => {
   try {
     // 先查询任务信息验证权限
     const [taskInfo] = await db.query('SELECT user_id FROM slave_tasks WHERE id = ?', [id]);
-    
+
     if (taskInfo.length === 0) {
       return res.error('任务不存在', 404);
     }
@@ -441,7 +441,7 @@ router.post('/dailyRules/save', asyncHandler(async (req, res) => {
         'UPDATE slave_daily_rules SET ? WHERE id = ?',
         [dailyRuleData, existing[0].id]
       );
-      
+
       return res.success({
         id: existing[0].id
       }, '更新每日规矩成功');
@@ -508,8 +508,24 @@ router.post('/temalock/list', asyncHandler(async (req, res) => {
     return res.error('type参数值无效', 400);
   }
 
-  if (type === 'wearer' && !date) {
-    return res.error('type为wearer时，date参数不能为空', 400);
+  if (type !== 'create' && !date) {
+    return res.error('type为wearer、manager时，date参数不能为空', 400);
+  }
+
+  // 添加日期格式验证
+  if (type === 'wearer' || type === 'manager') {
+    // 验证日期格式是否为 yyyy-mm-dd
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      return res.error('日期格式必须为 yyyy-mm-dd', 400);
+    }
+
+    const requestDate = new Date(date);
+    const today = new Date();
+
+    if (requestDate > today) {
+      return res.error('日期不能超过今天', 400);
+    }
   }
 
   try {
@@ -552,13 +568,10 @@ router.post('/temalock/list', asyncHandler(async (req, res) => {
     const queryParams = [];
 
     // 根据type添加不同的查询条件
-    if (type === 'wearer') {
-      sql += ` AND wearer_user_id = ? AND start_date <= ? AND update_end_date >= ?`;
+    if (type === 'wearer' || type === 'manager') {
+      sql += ` AND wearer_user_id = ? AND DATE(start_date) <= ? AND DATE(update_end_date) >= ?`;
       queryParams.push(userId, date, date);
       sql += ` GROUP BY wearer_user_id`; // 每个穿戴者只返回一条记录
-    } else if (type === 'manager') {
-      sql += ` AND manager_user_id = ?`;
-      queryParams.push(userId);
     } else if (type === 'create') {
       sql += ` AND create_user_id = ?`;
       queryParams.push(userId);
@@ -569,6 +582,88 @@ router.post('/temalock/list', asyncHandler(async (req, res) => {
     // 执行查询
     const [rows] = await db.query(sql, queryParams);
 
+    // 如果是wearer或manager类型,需要查询当日游戏记录
+    if ((type === 'wearer' || type === 'manager') && rows.length > 0) {
+      const temalock = rows[0];
+      
+      // 添加格式化的日期，用于比较
+      const formatStartDate = temalock.start_date.split(' ')[0];
+      const formatUpdateEndDate = temalock.update_end_date.split(' ')[0];
+
+      // 验证请求日期是否在开始日期之后
+      if (date < formatStartDate) {
+        return res.error('日期不能早于开始日期', 400);
+      }
+
+      // 计算从开始日期到今天的天数差
+      const startDate = new Date(formatStartDate);
+      const today = new Date();
+      const formatToday = today.toISOString().split('T')[0];
+      
+      const daysDiff = Math.floor((today - startDate) / (1000 * 60 * 60 * 24)) + 1;
+
+      // 查询已有的游戏记录数
+      const [gameRecords] = await db.query(`
+        SELECT DATE_FORMAT(game_date, '%Y-%m-%d') as game_date
+        FROM slave_daily_game
+        WHERE temalock_id = ?
+      `, [temalock.id]);
+      
+      // 如果记录数少于天数差，需要补充数据
+      if (gameRecords.length < daysDiff) {
+        // 创建一个Set存储已有记录的日期
+        const existingDates = new Set(gameRecords.map(record => record.game_date));
+
+        // 生成所有应该有记录的日期
+        const missingDates = [];
+        for (let i = 0; i < daysDiff; i++) {
+          const currentDate = new Date(startDate);
+          currentDate.setDate(startDate.getDate() + i);
+          // 使用 DATE_FORMAT 格式化日期为 YYYY-MM-DD
+          const formattedDate = currentDate.toISOString().split('T')[0];
+
+          // 如果这个日期没有记录，添加到缺失日期数组
+          if (!existingDates.has(formattedDate) && currentDate <= today) {
+            missingDates.push(formattedDate);
+          }
+        }
+        
+        let missingPenaltyMinutes = temalock.game_bet * temalock.min_game_times;
+        // 为每个缺失的日期创建记录
+        for (const missingDate of missingDates) {
+          
+          await db.query(`
+            INSERT INTO slave_daily_game 
+            (temalock_id, game_count, min_game_times, max_game_times, game_bet, penalty_minutes, game_date)
+            VALUES (?, 0, ?, ?, ?, ?, ?)
+          `, [
+            temalock.id,
+            temalock.min_game_times,
+            temalock.max_game_times,
+            temalock.game_bet,
+            missingDate == formatToday ? 0 : missingPenaltyMinutes,
+            missingDate
+          ]);
+        }
+
+        // 更新惩罚时间
+        if (missingDates.length > 0) {
+          // 如果包含当天，则惩罚时间减去当天
+          if (missingDates.includes(formatToday)) {
+            totalPenaltyMinutes = (missingDates.length - 1) * temalock.min_game_times * temalock.game_bet;
+          } else {
+            totalPenaltyMinutes = missingDates.length * temalock.min_game_times * temalock.game_bet;
+          }
+          await db.query(`
+            UPDATE slave_temalock 
+            SET game_times_penalty = COALESCE(game_times_penalty, 0) + ?,
+              update_end_date = DATE_ADD(update_end_date, INTERVAL ? MINUTE)
+            WHERE id = ?
+          `, [totalPenaltyMinutes, totalPenaltyMinutes, temalock.id]);
+        }
+      }
+    }
+
     return res.success({
       list: rows,
       total: rows.length
@@ -576,6 +671,10 @@ router.post('/temalock/list', asyncHandler(async (req, res) => {
 
   } catch (error) {
     console.error('获取 temalock 事件列表失败:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      console.warn('Duplicate entry detected:', error.sqlMessage);
+      return res.error('数据重复，请重试', 400);
+    }
     return res.error('获取 temalock 事件列表失败', 500);
   }
 }));
@@ -612,9 +711,9 @@ router.post('/temalock/add', asyncHandler(async (req, res) => {
   } = req.body;
 
   // 参数验证
-  if (!wearer_user_name || !wearer_user_id || !manager_user_name || 
-      !manager_user_id || !create_user_name || !create_user_id || !description || 
-      !start_date || !frequency || !default_end_date) {
+  if (!wearer_user_name || !wearer_user_id || !manager_user_name ||
+    !manager_user_id || !create_user_name || !create_user_id || !description ||
+    !start_date || !frequency || !default_end_date) {
     return res.error('缺少必要参数', 400);
   }
 
@@ -985,7 +1084,14 @@ router.post('/temalock/record/add', asyncHandler(async (req, res) => {
       [recordData]
     );
 
-    // 无论minute是正数还是负数，都更新update_end_date
+    // 先更新training_penalty字段
+    await db.query(`
+      UPDATE slave_temalock 
+      SET training_penalty = COALESCE(training_penalty, 0) + ?
+      WHERE id = ?
+    `, [minute, temalock_id]);
+
+    // 再更新update_end_date字段
     await db.query(`
       UPDATE slave_temalock 
       SET update_end_date = DATE_ADD(update_end_date, INTERVAL ? MINUTE)
@@ -1060,7 +1166,7 @@ router.post('/temalock/climax/list', asyncHandler(async (req, res) => {
 router.post('/temalock/climax/add', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
   const { temalock_id, climax_type, climax_method, climax_result, operation_time } = req.body;
-  
+
   // 参数验证
   if (!temalock_id || !climax_type || !climax_method || !climax_result || !operation_time) {
     return res.error('缺少必要参数', 400);
@@ -1113,116 +1219,124 @@ router.post('/temalock/climax/add', asyncHandler(async (req, res) => {
   }
 }));
 
-// 更新每日游戏记录
-// router.post('/temalock/game/update', asyncHandler(async (req, res) => {
-//   const userId = req.auth.userId;
-//   const { temalock_id } = req.body;
 
-//   // 参数验证
-//   if (!temalock_id) {
-//     return res.error('temalock_id不能为空', 400);
-//   }
 
-//   try {
-//     // 验证 temalock 记录是否存在，并检查权限
-//     const [temalockInfo] = await db.query(`
-//       SELECT 
-//         id, 
-//         manager_user_id, 
-//         wearer_user_id, 
-//         end_status,
-//         min_game_times,
-//         max_game_times,
-//         game_bet
-//       FROM slave_temalock 
-//       WHERE id = ?
-//     `, [temalock_id]);
+// 增加每日游戏记录
+router.post('/temalock/game/add', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { temalock_id, game_date } = req.body;
 
-//     if (temalockInfo.length === 0) {
-//       return res.error('temalock 记录不存在', 404);
-//     }
+  // 参数验证
+  if (!temalock_id) {
+    return res.error('temalock_id不能为空', 400);
+  }
 
-//     // 验证是否为管理者或穿戴者
-//     if (temalockInfo[0].manager_user_id !== userId && temalockInfo[0].wearer_user_id !== userId) {
-//       return res.error('只有管理者或穿戴者可以更新游戏记录', 403);
-//     }
+  try {
+    // 验证 temalock 记录是否存在，并检查权限
+    const [temalockInfo] = await db.query(`
+      SELECT 
+        id, 
+        manager_user_id, 
+        wearer_user_id, 
+        end_status,
+        min_game_times,
+        max_game_times,
+        game_bet
+      FROM slave_temalock 
+      WHERE id = ?
+    `, [temalock_id]);
 
-//     // 验证事件是否已结束
-//     if (temalockInfo[0].end_status !== 0) {
-//       return res.error('该事件已结束，无法更新游戏记录', 400);
-//     }
+    if (temalockInfo.length === 0) {
+      return res.error('temalock 记录不存在', 404);
+    }
 
-//     const today = new Date().toISOString().slice(0, 10); // 获取当前日期 YYYY-MM-DD
+    // 验证是否为管理者或穿戴者
+    if (temalockInfo[0].manager_user_id !== userId && temalockInfo[0].wearer_user_id !== userId) {
+      return res.error('只有管理者或穿戴者可以更新游戏记录', 403);
+    }
 
-//     // 查询今日游戏记录
-//     const [existingRecord] = await db.query(`
-//       SELECT id, game_count
-//       FROM slave_daily_game
-//       WHERE temalock_id = ? AND DATE(created_at) = ?
-//     `, [temalock_id, today]);
+    // 验证事件是否已结束
+    if (temalockInfo[0].end_status !== 0) {
+      return res.error('该事件已结束，无法更新游戏记录', 400);
+    }
 
-//     let game_count = 1; // 默认为1
-//     let penalty_minutes = 0;
+    // 使用传入的game_date或默认使用今天的日期
+    const gameDate = game_date || new Date().toISOString().slice(0, 10);
 
-//     if (existingRecord.length > 0) {
-//       // 如果已有记录，检查是否超过最大游戏次数
-//       if (existingRecord[0].game_count >= temalockInfo[0].max_game_times) {
-//         return res.error('已达到今日最大游戏次数限制', 400);
-//       }
-//       game_count = existingRecord[0].game_count + 1;
-//     }
+    // 查询指定日期的游戏记录
+    const [existingRecord] = await db.query(`
+      SELECT id, game_count
+      FROM slave_daily_game
+      WHERE temalock_id = ? AND game_date = ?
+    `, [temalock_id, gameDate]);
 
-//     // 如果游戏次数小于最小次数，计算惩罚时间
-//     if (game_count < temalockInfo[0].min_game_times) {
-//       const remaining_games = temalockInfo[0].min_game_times - game_count;
-//       penalty_minutes = remaining_games * temalockInfo[0].game_bet;
-//     }
+    let game_count = 1; // 默认值为 1
+    let penalty_minutes = 0;
 
-//     if (existingRecord.length > 0) {
-//       // 更新现有记录
-//       await db.query(`
-//         UPDATE slave_daily_game 
-//         SET game_count = ?,
-//             penalty_minutes = ?,
-//             min_game_times = ?,
-//             max_game_times = ?,
-//             game_bet = ?
-//         WHERE id = ?
-//       `, [
-//         game_count,
-//         penalty_minutes,
-//         temalockInfo[0].min_game_times,
-//         temalockInfo[0].max_game_times,
-//         temalockInfo[0].game_bet,
-//         existingRecord[0].id
-//       ]);
-//     } else {
-//       // 插入新记录
-//       await db.query(`
-//         INSERT INTO slave_daily_game 
-//         (temalock_id, game_count, min_game_times, max_game_times, game_bet, penalty_minutes)
-//         VALUES (?, ?, ?, ?, ?, ?)
-//       `, [
-//         temalock_id,
-//         game_count,
-//         temalockInfo[0].min_game_times,
-//         temalockInfo[0].max_game_times,
-//         temalockInfo[0].game_bet,
-//         penalty_minutes
-//       ]);
-//     }
+    if (existingRecord.length > 0) {
+      // 如果记录存在，检查是否超过最大游戏次数
+      if (existingRecord[0].game_count >= temalockInfo[0].max_game_times) {
+        return res.error('已达到该日最大游戏次数限制', 400);
+      }
+      game_count = existingRecord[0].game_count + 1;
 
-//     return res.success({
-//       game_count,
-//       penalty_minutes,
-//       min_game_times: temalockInfo[0].min_game_times,
-//       max_game_times: temalockInfo[0].max_game_times
-//     }, '更新游戏记录成功');
+      // 计算惩罚时间
+      if (game_count < temalockInfo[0].min_game_times) {
+        const remaining_games = temalockInfo[0].min_game_times - game_count;
+        penalty_minutes = remaining_games * temalockInfo[0].game_bet;
+      }
 
-//   } catch (error) {
-//     console.error('更新游戏记录失败:', error);
-//     return res.error('更新游戏记录失败', 500);
-//   }
-// }));
+      // 更新现有记录
+      await db.query(`
+        UPDATE slave_daily_game 
+        SET game_count = ?,
+            penalty_minutes = ?,
+            min_game_times = ?,
+            max_game_times = ?,
+            game_bet = ?
+        WHERE id = ?`, 
+      [
+        game_count,
+        penalty_minutes,
+        temalockInfo[0].min_game_times,
+        temalockInfo[0].max_game_times,
+        temalockInfo[0].game_bet,
+        existingRecord[0].id
+      ]);
+    } else {
+      // 计算惩罚时间
+      if (game_count < temalockInfo[0].min_game_times) {
+        const remaining_games = temalockInfo[0].min_game_times - game_count;
+        penalty_minutes = remaining_games * temalockInfo[0].game_bet;
+      }
+
+      // 插入新记录
+      await db.query(`
+        INSERT INTO slave_daily_game 
+        (temalock_id, game_count, min_game_times, max_game_times, game_bet, penalty_minutes, game_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        temalock_id,
+        game_count,
+        temalockInfo[0].min_game_times,
+        temalockInfo[0].max_game_times,
+        temalockInfo[0].game_bet,
+        penalty_minutes,
+        gameDate
+      ]);
+    }
+
+    return res.success({
+      game_count,
+      penalty_minutes,
+      min_game_times: temalockInfo[0].min_game_times,
+      max_game_times: temalockInfo[0].max_game_times
+    }, '更新游戏记录成功');
+
+  } catch (error) {
+    console.error('更新游戏记录失败:', error);
+    return res.error('更新游戏记录失败', 500);
+  }
+}));
 
 module.exports = router;
