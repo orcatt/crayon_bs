@@ -330,6 +330,10 @@ router.post('/tasks/delete', asyncHandler(async (req, res) => {
 }));
 
 
+
+
+// ? --------------------- 每日规矩表相关 ---------------------
+
 // 获取每日规矩
 router.post('/dailyRules/day', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -495,6 +499,8 @@ router.post('/dailyRules/delete', asyncHandler(async (req, res) => {
     return res.error('删除每日规矩失败', 500);
   }
 }));
+
+
 
 // ? --------------------- temalock表 ---------------------
 
@@ -978,6 +984,18 @@ router.post('/temalock/template/delete', asyncHandler(async (req, res) => {
   }
 }));
 
+
+
+
+// ? --------------------- 验证表相关 ---------------------
+
+
+
+
+
+
+// ? --------------------- 调教记录表相关 ---------------------
+
 // 获取调教记录列表
 router.post('/temalock/record/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -1109,6 +1127,10 @@ router.post('/temalock/record/add', asyncHandler(async (req, res) => {
 }));
 
 
+
+
+// ? --------------------- 高潮事件表相关 ---------------------
+
 // 获取高潮事件列表
 router.post('/temalock/climax/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
@@ -1220,6 +1242,8 @@ router.post('/temalock/climax/add', asyncHandler(async (req, res) => {
 }));
 
 
+
+// ? --------------------- 每日游戏记录表相关 ---------------------
 
 // 增加每日游戏记录
 router.post('/temalock/game/add', asyncHandler(async (req, res) => {
