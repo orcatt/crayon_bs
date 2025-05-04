@@ -989,6 +989,273 @@ router.post('/temalock/template/delete', asyncHandler(async (req, res) => {
 
 // ? --------------------- 验证表相关 ---------------------
 
+// 格式化日期为 YYYY-MM-DD HH:mm:ss
+function formatDateTime(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+// 获得验证记录（同时补缺失记录）
+router.post('/temalock/check/list', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { temalock_id } = req.body;
+
+  // 参数验证
+  if (!temalock_id) {
+    return res.error('temalock_id不能为空', 400);
+  }
+
+  try {
+    // 查询 temalock 信息
+    const [temalockInfo] = await db.query(`
+      SELECT 
+        id,
+        start_date,
+        frequency,
+        manager_user_id,
+        wearer_user_id
+      FROM slave_temalock 
+      WHERE id = ?
+    `, [temalock_id]);
+
+    if (temalockInfo.length === 0) {
+      return res.error('temalock 记录不存在', 404);
+    }
+
+    // 验证是否为管理者或穿戴者
+    if (temalockInfo[0].manager_user_id !== userId && temalockInfo[0].wearer_user_id !== userId) {
+      return res.error('只有管理者或穿戴者可以查看验证记录', 403);
+    }
+
+    // 生成验证时间数组
+    const startDate = new Date(temalockInfo[0].start_date);
+    const frequency = temalockInfo[0].frequency;
+    const now = new Date();
+    
+    // 计算验证时间点
+    const checkTimes = [];
+    // 第一个时间点是开始时间加上一个周期频率
+    let currentTime = new Date(startDate.getTime() + frequency * 60 * 60 * 1000);
+    
+    while (currentTime <= now) {
+      checkTimes.push(new Date(currentTime));
+      currentTime = new Date(currentTime.getTime() + frequency * 60 * 60 * 1000);
+    }
+
+    // 格式化时间数组，保持原始时区
+    const formattedCheckTimes = checkTimes.map(time => formatDateTime(time));
+    
+    // 查询现有的验证记录
+    const [existingRecords] = await db.query(`
+      SELECT check_original_time 
+      FROM slave_check_records 
+      WHERE temalock_id = ?
+    `, [temalock_id]);
+
+    // 获取现有的验证时间点，保持原始时区
+    const existingTimes = existingRecords.map(record => formatDateTime(new Date(record.check_original_time)));
+
+    // 找出缺失的时间点
+    const missingTimes = formattedCheckTimes.filter(time => !existingTimes.includes(time));
+
+    // 如果有缺失的时间点，插入新记录
+    if (missingTimes.length > 0) {
+      // 使用 INSERT IGNORE 避免重复插入
+      const insertValues = missingTimes.map(time => [
+        temalock_id,
+        null, // check_number
+        time, // check_original_time
+        'late', // check_result
+        null, // check_actual_time
+        0, // public_check
+        null // check_pic_url
+      ]);
+
+      await db.query(`
+        INSERT IGNORE INTO slave_check_records 
+        (temalock_id, check_number, check_original_time, check_result, check_actual_time, public_check, check_pic_url)
+        VALUES ?
+      `, [insertValues]);
+    }
+
+    // 查询补全后的所有记录
+    const [allRecords] = await db.query(`
+      SELECT 
+        id,
+        temalock_id,
+        check_number,
+        check_pic_url,
+        check_actual_time,
+        check_original_time,
+        check_result,
+        public_check,
+        created_at,
+        updated_at
+      FROM slave_check_records 
+      WHERE temalock_id = ?
+      ORDER BY check_original_time ASC
+    `, [temalock_id]);
+
+    // 查询最近的“正常”验证记录
+    const [lastValidRecord] = await db.query(`
+      SELECT 
+        check_original_time,
+        check_result
+      FROM slave_check_records 
+      WHERE temalock_id = ? 
+        AND check_actual_time IS NOT NULL
+      ORDER BY check_original_time DESC
+      LIMIT 1
+    `, [temalock_id]);
+
+    // 判断验证状态
+    let checkStatus = {
+      lastCheckTime: null,
+      nextCheckTime: null,
+      frequency: frequency,
+      description: null
+    };
+
+    if (lastValidRecord.length > 0) {
+      // 情况 1：存在正常验证记录 lastValidRecord
+
+      // lastCheckTime 为最后一次成功验证的时间
+      checkStatus.lastCheckTime = formatDateTime(new Date(lastValidRecord[0].check_original_time));
+
+      // 查询最新的验证记录
+      const [latestRecord] = await db.query(`
+        SELECT 
+          check_original_time,
+          check_actual_time
+        FROM slave_check_records 
+        WHERE temalock_id = ?
+        ORDER BY check_original_time DESC
+        LIMIT 1
+      `, [temalock_id]);
+      
+      if (latestRecord[0].check_actual_time) {
+        // 情况 1.1：最新验证已完成
+        const nextTime = new Date(latestRecord[0].check_original_time);
+        nextTime.setHours(nextTime.getHours() + frequency);
+        checkStatus.nextCheckTime = formatDateTime(nextTime);
+        checkStatus.description = '最新验证已完成，nextCheckTime为下次验证时间';
+      } else {
+        // 情况 1.2：最新验证未完成
+        checkStatus.nextCheckTime = formatDateTime(new Date(latestRecord[0].check_original_time));
+        checkStatus.description = '最新验证未完成，nextCheckTime为本次验证时间';
+      }
+    } else {
+      // 情况 2：没有正常验证记录
+      if (formattedCheckTimes.length > 0) {
+        // 情况 2.1：存在需要验证的数据
+        checkStatus.lastCheckTime = formattedCheckTimes[0];
+        checkStatus.nextCheckTime = formattedCheckTimes[formattedCheckTimes.length - 1];
+        checkStatus.description = '不存在正常验证记录，lastCheckTime为首个原定验证时间，nextCheckTime为最新原定验证时间';
+      } else {
+        // 情况 2.2：不存在需要验证的数据（可能时间太短）
+        checkStatus.lastCheckTime = null;
+        checkStatus.nextCheckTime = formatDateTime(new Date(startDate.getTime() + frequency * 60 * 60 * 1000));
+        checkStatus.description = '不存在验证记录，可能验证任务还未开始，nextCheckTime为首次验证时间';
+      }
+    }
+
+    return res.success({
+      check_times: formattedCheckTimes,
+      check_status: checkStatus,
+      records: allRecords
+    }, '获取验证记录成功');
+
+  } catch (error) {
+    console.error('获取验证记录失败:', error);
+    return res.error('获取验证记录失败', 500);
+  }
+}));
+
+// 新增更新验证记录
+router.post('/temalock/check/update', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { temalock_id, check_original_time, check_result, check_actual_time, public_check, check_pic_url, check_number } = req.body;
+
+  // 参数验证
+  if (!temalock_id || !check_original_time || !check_result || !check_actual_time || !public_check || !check_pic_url || !check_number) {
+    return res.error('缺少必要参数', 400);
+  }
+
+  try {
+    // 验证 temalock 记录是否存在，并检查权限
+    const [temalockInfo] = await db.query(`
+      SELECT id, manager_user_id, wearer_user_id
+      FROM slave_temalock 
+      WHERE id = ?
+    `, [temalock_id]);
+
+    if (temalockInfo.length === 0) {
+      return res.error('temalock 记录不存在', 404);
+    }
+
+    // 验证是否为穿戴者
+    if (temalockInfo[0].wearer_user_id !== userId) {
+      return res.error('只有穿戴者可以更新验证记录', 403);
+    }
+
+    // 查询验证记录是否存在
+    const [existingRecord] = await db.query(`
+      SELECT id
+      FROM slave_check_records 
+      WHERE temalock_id = ? AND check_original_time = ?
+    `, [temalock_id, check_original_time]);
+
+    let result;
+    if (existingRecord.length > 0) {
+      // 更新现有记录
+      [result] = await db.query(`
+        UPDATE slave_check_records 
+        SET check_number = ?,
+            check_result = ?,
+            check_actual_time = ?,
+            public_check = ?,
+            check_pic_url = ?,
+            updated_at = NOW()
+        WHERE id = ?
+      `, [check_number, check_result, check_actual_time, public_check, check_pic_url, existingRecord[0].id]);
+    } else {
+      // 插入新记录
+      [result] = await db.query(`
+        INSERT INTO slave_check_records 
+        (temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url]);
+    }
+
+    // 查询更新后的记录
+    const [updatedRecord] = await db.query(`
+      SELECT 
+        id,
+        temalock_id,
+        check_number,
+        check_pic_url,
+        check_actual_time,
+        check_original_time,
+        check_result,
+        public_check,
+        created_at,
+        updated_at
+      FROM slave_check_records 
+      WHERE id = ?
+    `, [existingRecord.length > 0 ? existingRecord[0].id : result.insertId]);
+
+    return res.success(updatedRecord[0], existingRecord.length > 0 ? '更新验证记录成功' : '新增验证记录成功');
+
+  } catch (error) {
+    console.error('更新验证记录失败:', error);
+    return res.error('更新验证记录失败', 500);
+  }
+}));
 
 
 
@@ -1196,8 +1463,7 @@ router.post('/temalock/climax/add', asyncHandler(async (req, res) => {
 
   try {
     // 验证 temalock 记录是否存在，并检查权限（管理者和穿戴者都可以添加记录）
-    const [temalockInfo] = await db.query(`
-      SELECT id, manager_user_id, wearer_user_id, end_status 
+    const [temalockInfo] = await db.query(`      SELECT id, manager_user_id, wearer_user_id, end_status 
       FROM slave_temalock 
       WHERE id = ?
     `, [temalock_id]);
