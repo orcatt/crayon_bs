@@ -162,26 +162,35 @@ async function isNumberExists(number) {
 // 获取任务列表
 router.post('/tasks/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { type } = req.body;  // 获取可选的 type 参数
+  const { type, difficulty_level } = req.body;  // 获取可选的 type 和 difficulty_level 参数
+
+  // 验证 difficulty_level 参数
+  if (difficulty_level && (difficulty_level < 1 || difficulty_level > 5)) {
+    return res.error('难度级别必须在1-5之间', 400);
+  }
 
   try {
-    // 构建基础 SQL，根据是否有 type 参数添加条件
+    // 构建基础 SQL，根据是否有 type 和 difficulty_level 参数添加条件
     const typeCondition = type ? 'AND type = ?' : '';
+    const difficultyCondition = difficulty_level ? 'AND difficulty_level = ?' : '';
     const sql = `
       (SELECT *, 1 as sort_order 
         FROM slave_tasks 
-        WHERE user_id = ? ${typeCondition})
+        WHERE user_id = ? ${typeCondition} ${difficultyCondition})
       UNION ALL
       (SELECT *, 2 as sort_order 
         FROM slave_tasks 
-        WHERE public_display = 1 AND user_id != ? ${typeCondition})
+        WHERE public_display = 1 AND user_id != ? ${typeCondition} ${difficultyCondition})
       ORDER BY sort_order, id DESC
     `;
 
     // 构建查询参数数组
-    const params = type
-      ? [userId, type, userId, type]  // 有 type 参数时
-      : [userId, userId];             // 没有 type 参数时
+    let params = [userId];
+    if (type) params.push(type);
+    if (difficulty_level) params.push(difficulty_level);
+    params.push(userId);
+    if (type) params.push(type);
+    if (difficulty_level) params.push(difficulty_level);
 
     const [tasks] = await db.query(sql, params);
 
@@ -1101,7 +1110,7 @@ router.post('/temalock/check/list', asyncHandler(async (req, res) => {
       ORDER BY check_original_time ASC
     `, [temalock_id]);
 
-    // 查询最近的“正常”验证记录
+    // 查询最近的"正常"验证记录
     const [lastValidRecord] = await db.query(`
       SELECT 
         check_original_time,
