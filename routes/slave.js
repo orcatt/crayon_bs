@@ -164,15 +164,29 @@ router.post('/tasks/list', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
   const { type, difficulty_level } = req.body;  // 获取可选的 type 和 difficulty_level 参数
 
-  // 验证 difficulty_level 参数
-  if (difficulty_level && (difficulty_level < 1 || difficulty_level > 5)) {
-    return res.error('难度级别必须在1-5之间', 400);
+  // 处理 difficulty_level 参数
+  let difficultyLevels = [];
+  if (difficulty_level) {
+    // 将字符串转换为数组
+    difficultyLevels = difficulty_level.toString().split(',').map(level => level.trim());
+    
+    // 验证每个难度级别是否在有效范围内
+    const invalidLevels = difficultyLevels.filter(level => {
+      const num = parseInt(level);
+      return isNaN(num) || num < 1 || num > 5;
+    });
+
+    if (invalidLevels.length > 0) {
+      return res.error('难度级别必须在1-5之间', 400);
+    }
   }
 
   try {
     // 构建基础 SQL，根据是否有 type 和 difficulty_level 参数添加条件
     const typeCondition = type ? 'AND type = ?' : '';
-    const difficultyCondition = difficulty_level ? 'AND difficulty_level = ?' : '';
+    const difficultyCondition = difficultyLevels.length > 0 
+      ? `AND difficulty_level IN (${difficultyLevels.map(() => '?').join(',')})` 
+      : '';
     const sql = `
       (SELECT *, 1 as sort_order 
         FROM slave_tasks 
@@ -187,10 +201,10 @@ router.post('/tasks/list', asyncHandler(async (req, res) => {
     // 构建查询参数数组
     let params = [userId];
     if (type) params.push(type);
-    if (difficulty_level) params.push(difficulty_level);
+    if (difficultyLevels.length > 0) params.push(...difficultyLevels);
     params.push(userId);
     if (type) params.push(type);
-    if (difficulty_level) params.push(difficulty_level);
+    if (difficultyLevels.length > 0) params.push(...difficultyLevels);
 
     const [tasks] = await db.query(sql, params);
 
@@ -385,7 +399,60 @@ router.post('/dailyRules/day', asyncHandler(async (req, res) => {
       return res.error('未找到指定日期的规矩记录', 404);
     }
 
-    return res.success(rows[0], '获取成功');
+    const dailyRule = rows[0];
+    let dailyTask = null;
+    let extraTask = null;
+
+    // 如果存在 daily_task_id，查询日常任务信息
+    if (dailyRule.daily_task_id) {
+      const [dailyTasks] = await db.query(`
+        SELECT 
+          id,
+          user_id,
+          name,
+          description,
+          type,
+          reward_punishment,
+          difficulty_level,
+          public_display
+        FROM slave_tasks
+        WHERE id = ?
+      `, [dailyRule.daily_task_id]);
+      
+      if (dailyTasks.length > 0) {
+        dailyTask = dailyTasks[0];
+      }
+    }
+
+    // 如果存在 extra_task_id，查询额外任务信息
+    if (dailyRule.extra_task_id) {
+      const [extraTasks] = await db.query(`
+        SELECT 
+          id,
+          user_id,
+          name,
+          description,
+          type,
+          reward_punishment,
+          difficulty_level,
+          public_display
+        FROM slave_tasks
+        WHERE id = ?
+      `, [dailyRule.extra_task_id]);
+      
+      if (extraTasks.length > 0) {
+        extraTask = extraTasks[0];
+      }
+    }
+
+    // 将任务信息添加到返回数据中
+    const responseData = {
+      ...dailyRule,
+      daily_task: dailyTask,
+      extra_task: extraTask
+    };
+
+    return res.success(responseData, '获取成功');
   } catch (error) {
     console.error('获取每日规矩失败:', error);
     return res.error('获取每日规矩失败', 500);
@@ -395,24 +462,7 @@ router.post('/dailyRules/day', asyncHandler(async (req, res) => {
 // 新增/修改每日规矩
 router.post('/dailyRules/save', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const {
-    date,  // 必填
-    kowtow = 0,
-    is_locked = 0,
-    touch_count = 0,
-    libido_status = '平常',
-    excretion_count_allowed = 0,
-    excretion_count = 0,
-    water_intake = '0',
-    water_completed = 0,
-    other_tools = null,
-    daily_task_id = null,
-    daily_task_completed = 0,
-    extra_task_id = null,
-    extra_task_completed = 0,
-    violation = null,
-    score = null
-  } = req.body;
+  const { date } = req.body;  // 只解构必填的 date 字段
 
   // 参数验证
   if (!date) {
@@ -422,7 +472,7 @@ router.post('/dailyRules/save', asyncHandler(async (req, res) => {
   try {
     // 查询是否存在当天的记录
     const [existing] = await db.query(
-      'SELECT id FROM slave_daily_rules WHERE user_id = ? AND date = ?',
+      'SELECT * FROM slave_daily_rules WHERE user_id = ? AND date = ?',
       [userId, date]
     );
 
@@ -430,34 +480,51 @@ router.post('/dailyRules/save', asyncHandler(async (req, res) => {
     const dailyRuleData = {
       user_id: userId,
       date,
-      kowtow,
-      is_locked,
-      touch_count,
-      libido_status,
-      excretion_count_allowed,
-      excretion_count,
-      water_intake,
-      water_completed,
-      other_tools,
-      daily_task_id,
-      daily_task_completed,
-      extra_task_id,
-      extra_task_completed,
-      violation,
-      score
+      ...req.body  // 直接使用请求体中的所有字段
     };
 
     let result;
     if (existing.length > 0) {
-      // 更新现有记录
+      // 更新现有记录，只更新传入的字段
+      const updateData = {};
+      Object.keys(req.body).forEach(key => {
+        if (req.body[key] !== undefined) {  // 只更新明确传入的字段
+          updateData[key] = req.body[key];
+        }
+      });
+
       [result] = await db.query(
         'UPDATE slave_daily_rules SET ? WHERE id = ?',
-        [dailyRuleData, existing[0].id]
+        [updateData, existing[0].id]
       );
 
-      return res.success({
-        id: existing[0].id
-      }, '更新每日规矩成功');
+      // 查询更新后的完整记录
+      const [updatedRecord] = await db.query(`
+        SELECT 
+          id,
+          user_id,
+          kowtow,
+          is_locked,
+          touch_count,
+          libido_status,
+          excretion_count_allowed,
+          excretion_count,
+          water_intake,
+          water_completed,
+          other_tools,
+          daily_task_id,
+          daily_task_completed,
+          extra_task_id,
+          extra_task_completed,
+          violation,
+          score,
+          DATE_FORMAT(date, '%Y-%m-%d') as date,
+          DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at
+        FROM slave_daily_rules
+        WHERE id = ?
+      `, [existing[0].id]);
+
+      return res.success(updatedRecord[0], '更新每日规矩成功');
     } else {
       // 插入新记录
       [result] = await db.query(
@@ -465,9 +532,33 @@ router.post('/dailyRules/save', asyncHandler(async (req, res) => {
         [dailyRuleData]
       );
 
-      return res.success({
-        id: result.insertId
-      }, '新增每日规矩成功');
+      // 查询插入后的完整记录
+      const [newRecord] = await db.query(`
+        SELECT 
+          id,
+          user_id,
+          kowtow,
+          is_locked,
+          touch_count,
+          libido_status,
+          excretion_count_allowed,
+          excretion_count,
+          water_intake,
+          water_completed,
+          other_tools,
+          daily_task_id,
+          daily_task_completed,
+          extra_task_id,
+          extra_task_completed,
+          violation,
+          score,
+          DATE_FORMAT(date, '%Y-%m-%d') as date,
+          DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at
+        FROM slave_daily_rules
+        WHERE id = ?
+      `, [result.insertId]);
+
+      return res.success(newRecord[0], '新增每日规矩成功');
     }
   } catch (error) {
     console.error('保存每日规矩失败:', error);
