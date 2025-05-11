@@ -795,34 +795,33 @@ router.post('/temalock/add', asyncHandler(async (req, res) => {
     manager_user_id,
     create_user_name,
     create_user_id,
-    share_template = 0,
+    share_template,
     description,
     start_date,
     frequency,
     default_end_date,
     share_link_status = 0,
     share_link_url = null,
-    share_link_bet = null,
-    display_countdown_status = 'hidden',
-    display_countdown_max_bet = null,
-    public_everyone_status = 0,
-    public_everyone_bet = null,
-    min_game_times = 0,
-    max_game_times = 0,
-    game_bet = null,
-    regular_cleaning_status = 0,
-    regular_cleaning_frequency = null,
-    end_condition = 0,
-    end_status = 0
+    share_link_bet,
+    display_countdown_status,
+    display_countdown_max_bet,
+    public_everyone_status,
+    public_everyone_bet,
+    min_game_times,
+    max_game_times,
+    game_bet,
+    regular_cleaning_status,
+    regular_cleaning_frequency,
+    end_condition,
+    end_status
   } = req.body;
 
   // 参数验证
-  if (!wearer_user_name || !wearer_user_id || !manager_user_name ||
-    !manager_user_id || !create_user_name || !create_user_id || !description ||
-    !start_date || !frequency || !default_end_date) {
+  if (!wearer_user_name || !wearer_user_id || !create_user_name || !create_user_id || !description ||
+    !start_date || !frequency || !default_end_date || !min_game_times || !max_game_times || !game_bet) {
     return res.error('缺少必要参数', 400);
   }
-
+  
   try {
     // 检查时间段内是否已存在进行中的事件（针对穿戴者）
     const [existingEvents] = await db.query(`
@@ -1424,12 +1423,18 @@ router.post('/temalock/record/add', asyncHandler(async (req, res) => {
     title,
     occur_time,
     reason,
-    minute
+    minute,
+    reward_punishment
   } = req.body;
 
   // 参数验证
-  if (!temalock_id || !title || !occur_time || !reason || !minute) {
+  if (!temalock_id || !title || !occur_time || !reason || !minute || !reward_punishment) {
     return res.error('缺少必要参数', 400);
+  }
+
+  // 验证 reward_punishment 的值
+  if (!['REWARD', 'PUNISHMENT'].includes(reward_punishment)) {
+    return res.error('reward_punishment 必须是 REWARD 或 PUNISHMENT', 400);
   }
 
   try {
@@ -1460,7 +1465,8 @@ router.post('/temalock/record/add', asyncHandler(async (req, res) => {
       title,
       occur_time,
       reason,
-      minute
+      minute,
+      reward_punishment
     };
 
     // 插入记录
@@ -1469,19 +1475,22 @@ router.post('/temalock/record/add', asyncHandler(async (req, res) => {
       [recordData]
     );
 
-    // 先更新training_penalty字段
+    // 根据 reward_punishment 决定是增加还是减少时间
+    const timeAdjustment = reward_punishment === 'REWARD' ? -minute : minute;
+
+    // 更新 training_penalty 字段
     await db.query(`
       UPDATE slave_temalock 
       SET training_penalty = COALESCE(training_penalty, 0) + ?
       WHERE id = ?
-    `, [minute, temalock_id]);
+    `, [timeAdjustment, temalock_id]);
 
-    // 再更新update_end_date字段
+    // 更新 update_end_date 字段
     await db.query(`
       UPDATE slave_temalock 
       SET update_end_date = DATE_ADD(update_end_date, INTERVAL ? MINUTE)
       WHERE id = ?
-    `, [minute, temalock_id]);
+    `, [timeAdjustment, temalock_id]);
 
     return res.success({
       id: result.insertId
