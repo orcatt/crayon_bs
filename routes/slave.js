@@ -1083,10 +1083,72 @@ router.post('/temalock/template/delete', asyncHandler(async (req, res) => {
   }
 }));
 
+// 绑定管理者
+router.post('/temalock/bind/manager', asyncHandler(async (req, res) => {
+  // const userId = req.auth.userId;
+  const { temalock_id, manager_user_id } = req.body;
 
+  // 参数验证
+  if (!temalock_id || !manager_user_id) {
+    return res.error('缺少必要参数', 400);
+  }
 
+  try {
+    // 验证 temalock 记录是否存在
+    const [temalockInfo] = await db.query(`
+      SELECT 
+        id,
+        wearer_user_id,
+        manager_user_id,
+        end_status
+      FROM slave_temalock 
+      WHERE id = ?
+    `, [temalock_id]);
 
-// ? --------------------- 验证表相关 ---------------------
+    if (temalockInfo.length === 0) {
+      return res.error('temalock 记录不存在', 404);
+    }
+
+    // 验证事件是否已结束
+    if (temalockInfo[0].end_status !== 0) {
+      return res.error('该事件已结束，无法绑定管理者', 400);
+    }
+
+    // 验证是否已绑定管理者
+    if (temalockInfo[0].manager_user_id) {
+      return res.error('该事件已绑定管理者', 400);
+    }
+
+    // 验证管理者用户是否存在
+    const [managerInfo] = await db.query(`
+      SELECT id, nickname
+      FROM users 
+      WHERE id = ?
+    `, [manager_user_id]);
+
+    if (managerInfo.length === 0) {
+      return res.error('管理者用户不存在', 404);
+    }
+
+    // 更新 temalock 记录，绑定管理者
+    await db.query(`
+      UPDATE slave_temalock 
+      SET 
+        manager_user_id = ?,
+        manager_user_name = ?
+      WHERE id = ?
+    `, [manager_user_id, managerInfo[0].nickname, temalock_id]);
+
+    return res.success({
+      manager_user_id: manager_user_id,
+      manager_user_name: managerInfo[0].nickname
+    }, '绑定管理者成功');
+
+  } catch (error) {
+    console.error('绑定管理者失败:', error);
+    return res.error('绑定管理者失败', 500);
+  }
+}));
 
 // 格式化日期为 YYYY-MM-DD HH:mm:ss
 function formatDateTime(date) {
