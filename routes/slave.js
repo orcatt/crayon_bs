@@ -626,9 +626,11 @@ router.post('/temalock/list', asyncHandler(async (req, res) => {
       return res.error('日期格式必须为 yyyy-mm-dd', 400);
     }
 
-    const requestDate = new Date(date);
+    // 将输入的日期转换为本地时区的日期（去掉时间部分）
+    const requestDate = new Date(date + 'T00:00:00');
     const today = new Date();
-
+    today.setHours(0, 0, 0, 0);  // 将今天的时间设置为 00:00:00
+    
     if (requestDate > today) {
       return res.error('日期不能超过今天', 400);
     }
