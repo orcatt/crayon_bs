@@ -1306,10 +1306,14 @@ router.post('/temalock/check/list', asyncHandler(async (req, res) => {
         const nextTime = new Date(latestRecord[0].check_original_time);
         nextTime.setHours(nextTime.getHours() + frequency);
         checkStatus.nextCheckTime = formatDateTime(nextTime);
+        checkStatus.title = '下次验证';
+        checkStatus.state = 'next';
         checkStatus.description = '最新验证已完成，nextCheckTime为下次验证时间';
       } else {
         // 情况 1.2：最新验证未完成
         checkStatus.nextCheckTime = formatDateTime(new Date(latestRecord[0].check_original_time));
+        checkStatus.title = '待验证';
+        checkStatus.state = 'late';
         checkStatus.description = '最新验证未完成，nextCheckTime为本次验证时间';
       }
     } else {
@@ -1318,11 +1322,15 @@ router.post('/temalock/check/list', asyncHandler(async (req, res) => {
         // 情况 2.1：存在需要验证的数据
         checkStatus.lastCheckTime = formattedCheckTimes[0];
         checkStatus.nextCheckTime = formattedCheckTimes[formattedCheckTimes.length - 1];
+        checkStatus.title = '从未验证';
+        checkStatus.state = 'lateNever';
         checkStatus.description = '不存在正常验证记录，lastCheckTime为首个原定验证时间，nextCheckTime为最新原定验证时间';
       } else {
         // 情况 2.2：不存在需要验证的数据（可能时间太短）
         checkStatus.lastCheckTime = null;
         checkStatus.nextCheckTime = formatDateTime(new Date(startDate.getTime() + frequency * 60 * 60 * 1000));
+        checkStatus.title = '首次验证';
+        checkStatus.state = 'first';
         checkStatus.description = '不存在验证记录，可能验证任务还未开始，nextCheckTime为首次验证时间';
       }
     }
