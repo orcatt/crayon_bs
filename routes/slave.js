@@ -1350,7 +1350,7 @@ router.post('/temalock/check/list', asyncHandler(async (req, res) => {
 // 新增更新验证记录
 router.post('/temalock/check/update', asyncHandler(async (req, res) => {
   const userId = req.auth.userId;
-  const { temalock_id, check_original_time, check_result, check_actual_time, public_check, check_pic_url, check_number } = req.body;
+  const { temalock_id, check_original_time, check_result, check_actual_time, public_check, check_pic_url, check_number, check_penalty } = req.body;
 
   // 参数验证
   if (!temalock_id || !check_original_time || !check_result || !check_actual_time || !public_check || !check_pic_url || !check_number) {
@@ -1391,16 +1391,34 @@ router.post('/temalock/check/update', asyncHandler(async (req, res) => {
             check_actual_time = ?,
             public_check = ?,
             check_pic_url = ?,
+            check_penalty = ?,
             updated_at = NOW()
         WHERE id = ?
-      `, [check_number, check_result, check_actual_time, public_check, check_pic_url, existingRecord[0].id]);
+      `, [check_number, check_result, check_actual_time, public_check, check_pic_url, check_penalty, existingRecord[0].id]);
     } else {
       // 插入新记录
       [result] = await db.query(`
         INSERT INTO slave_check_records 
-        (temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url]);
+        (temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url, check_penalty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [temalock_id, check_original_time, check_number, check_result, check_actual_time, public_check, check_pic_url, check_penalty]);
+    }
+
+    // 如果存在惩罚时间且大于0，更新 temalock 表的相关字段
+    if (check_penalty && check_penalty > 0) {
+      // 更新 check_penalty 字段
+      await db.query(`
+        UPDATE slave_temalock 
+        SET check_penalty = COALESCE(check_penalty, 0) + ?
+        WHERE id = ?
+      `, [check_penalty, temalock_id]);
+
+      // 更新 update_end_date 字段
+      await db.query(`
+        UPDATE slave_temalock 
+        SET update_end_date = DATE_ADD(update_end_date, INTERVAL ? MINUTE)
+        WHERE id = ?
+      `, [check_penalty, temalock_id]);
     }
 
     // 查询更新后的记录
@@ -1413,6 +1431,7 @@ router.post('/temalock/check/update', asyncHandler(async (req, res) => {
         check_actual_time,
         check_original_time,
         check_result,
+        check_penalty,
         public_check,
         created_at,
         updated_at
