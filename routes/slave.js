@@ -1829,4 +1829,109 @@ router.post('/temalock/game/add', asyncHandler(async (req, res) => {
   }
 }));
 
+// 获取指定时间范围内的游戏记录
+router.post('/temalock/game/list', asyncHandler(async (req, res) => {
+  const userId = req.auth.userId;
+  const { temalock_id, start_date, end_date } = req.body;
+
+  // 参数验证
+  if (!temalock_id || !start_date) {
+    return res.error('temalock_id和start_date不能为空', 400);
+  }
+
+  // 验证日期格式
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(start_date)) {
+    return res.error('start_date日期格式必须为 yyyy-mm-dd', 400);
+  }
+  if (end_date && !dateRegex.test(end_date)) {
+    return res.error('end_date日期格式必须为 yyyy-mm-dd', 400);
+  }
+
+  try {
+    // 验证 temalock 记录是否存在，并检查权限
+    const [temalockInfo] = await db.query(`
+      SELECT 
+        id, 
+        manager_user_id, 
+        wearer_user_id,
+        min_game_times,
+        max_game_times,
+        game_bet
+      FROM slave_temalock 
+      WHERE id = ?
+    `, [temalock_id]);
+
+    if (temalockInfo.length === 0) {
+      return res.error('temalock 记录不存在', 404);
+    }
+
+    // 验证是否为管理者或穿戴者
+    if (temalockInfo[0].manager_user_id !== userId && temalockInfo[0].wearer_user_id !== userId) {
+      return res.error('只有管理者或穿戴者可以查看游戏记录', 403);
+    }
+
+    // 构建查询条件
+    let dateCondition = 'game_date = ?';
+    let queryParams = [temalock_id, start_date];
+
+    if (end_date) {
+      dateCondition = 'game_date BETWEEN ? AND ?';
+      queryParams = [temalock_id, start_date, end_date];
+    }
+
+    // 查询游戏记录
+    const [records] = await db.query(`
+      SELECT 
+        id,
+        temalock_id,
+        game_count,
+        min_game_times,
+        max_game_times,
+        game_bet,
+        penalty_minutes,
+        DATE_FORMAT(game_date, '%Y-%m-%d') as game_date,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+        DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') as updated_at
+      FROM slave_daily_game
+      WHERE temalock_id = ? AND ${dateCondition}
+      ORDER BY game_date ASC
+    `, queryParams);
+
+    // 计算统计信息
+    const statistics = {
+      total_game_count: 0,
+      total_penalty_minutes: 0,
+      days_count: records.length,
+      completed_days: 0, // 完成最小游戏次数的天数
+      uncompleted_days: 0 // 未完成最小游戏次数的天数
+    };
+
+    records.forEach(record => {
+      statistics.total_game_count += record.game_count;
+      statistics.total_penalty_minutes += record.penalty_minutes;
+      if (record.game_count >= record.min_game_times) {
+        statistics.completed_days += 1;
+      } else {
+        statistics.uncompleted_days += 1;
+      }
+    });
+
+    return res.success({
+      list: records,
+      total: records.length,
+      statistics: statistics,
+      temalock_info: {
+        min_game_times: temalockInfo[0].min_game_times,
+        max_game_times: temalockInfo[0].max_game_times,
+        game_bet: temalockInfo[0].game_bet
+      }
+    }, '获取游戏记录成功');
+
+  } catch (error) {
+    console.error('获取游戏记录失败:', error);
+    return res.error('获取游戏记录失败', 500);
+  }
+}));
+
 module.exports = router;
